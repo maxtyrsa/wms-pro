@@ -8,7 +8,6 @@ import { db } from '@/lib/firebase';
 import { startOfDay, endOfDay, format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import Link from 'next/link';
-import { showToast } from '@/components/Toast';
 
 const PAGE_SIZE = 20;
 
@@ -21,6 +20,7 @@ export default function OrdersByDatePage() {
   const [hasMore, setHasMore] = useState(true);
   const [lastDoc, setLastDoc] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
   const [totalLoaded, setTotalLoaded] = useState(0);
+  const [error, setError] = useState<string | null>(null);
 
   const loadOrders = useCallback(async (loadMore = false) => {
     if (loadMore) {
@@ -31,14 +31,12 @@ export default function OrdersByDatePage() {
       setLastDoc(null);
       setHasMore(true);
       setTotalLoaded(0);
+      setError(null);
     }
 
     try {
-      // Получаем начало и конец сегодняшнего дня в ISO строке
       const todayStart = startOfDay(new Date()).toISOString();
       const todayEnd = endOfDay(new Date()).toISOString();
-      
-      console.log('Loading orders from:', todayStart, 'to:', todayEnd);
       
       let q = query(
         collection(db, 'orders'),
@@ -53,7 +51,6 @@ export default function OrdersByDatePage() {
       }
       
       const snapshot = await getDocs(q);
-      console.log('Found orders:', snapshot.docs.length);
       
       const newOrders = snapshot.docs.map(doc => {
         const data = doc.data();
@@ -76,9 +73,9 @@ export default function OrdersByDatePage() {
         setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
       }
       setHasMore(snapshot.docs.length === PAGE_SIZE);
-    } catch (error) {
-      console.error('Error loading orders:', error);
-      showToast('Ошибка при загрузке заказов', 'error');
+    } catch (err) {
+      console.error('Error loading orders:', err);
+      setError('Ошибка при загрузке заказов');
     } finally {
       setLoading(false);
       setLoadingMore(false);
@@ -113,6 +110,24 @@ export default function OrdersByDatePage() {
       default: return status;
     }
   };
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-slate-50 p-4">
+        <div className="max-w-lg mx-auto">
+          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl">
+            <p className="font-medium">{error}</p>
+            <button 
+              onClick={() => loadOrders()}
+              className="mt-3 px-4 py-2 bg-red-100 hover:bg-red-200 rounded-lg text-sm font-medium transition-colors"
+            >
+              Попробовать снова
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20">
