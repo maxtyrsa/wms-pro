@@ -27,15 +27,18 @@ import {
   Clock, User, Truck, Hash, Calendar, CheckCircle2, ArrowLeft, Trash2,
   ChevronLeft, ChevronRight, Loader2
 } from 'lucide-react';
+import { useToast } from '@/components/Toast';
 
 const CARRIERS = ['Все', 'CDEK', 'DPD', 'Деловые линии', 'Почта России', 'ПЭК', 'Самовывоз', 'Образцы', 'OZON_FBS', 'Ярмарка Мастеров', 'Yandex Market', 'WB_FBS', 'AliExpress', 'Бийск', 'OZON_FBO', 'WB_FBO'];
 const STATUSES = ['Все', 'Новый', 'Комплектация', 'Ожидает оформления', 'Готов к выдаче', 'Оформлен', 'Завершен'];
 
-const PAGE_SIZE = 20; // Количество заказов на странице
+const PAGE_SIZE = 20;
 
 export default function AdminOrdersPage() {
   const { user } = useAuth();
   const router = useRouter();
+  const { showToast } = useToast();
+  
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -43,6 +46,12 @@ export default function AdminOrdersPage() {
   const [lastDoc, setLastDoc] = useState<QueryDocumentSnapshot | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalOrders, setTotalOrders] = useState(0);
+  
+  // States for loading indicators
+  const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null);
+  const [updatingStatusId, setUpdatingStatusId] = useState<string | null>(null);
+  const [bulkUpdating, setBulkUpdating] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   // Filters
   const [dateRange, setDateRange] = useState<{ start: string; end: string }>({
@@ -60,10 +69,6 @@ export default function AdminOrdersPage() {
   const [massStatusMenuOpen, setMassStatusMenuOpen] = useState(false);
 
   // Загрузка первой страницы
-  useEffect(() => {
-    loadFirstPage();
-  }, [dateRange, selectedCarrier, selectedStatus]);
-
   const loadFirstPage = async () => {
     setLoading(true);
     setOrders([]);
@@ -83,11 +88,9 @@ export default function AdminOrdersPage() {
         setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
       }
       setHasMore(snapshot.docs.length === PAGE_SIZE);
-      
-      // Подсчет общего количества (опционально, можно сделать отдельный запрос)
-      // countTotalOrders();
     } catch (error) {
       console.error('Error loading orders:', error);
+      showToast('Ошибка при загрузке заказов', 'error');
     } finally {
       setLoading(false);
     }
@@ -119,35 +122,23 @@ export default function AdminOrdersPage() {
       setCurrentPage(prev => prev + 1);
     } catch (error) {
       console.error('Error loading more orders:', error);
+      showToast('Ошибка при загрузке дополнительных заказов', 'error');
     } finally {
       setLoadingMore(false);
     }
   };
 
   const applyFilters = (baseQuery: any) => {
-    // Применяем фильтры
-    if (dateRange.start && dateRange.end) {
-      const startDate = new Date(dateRange.start);
-      const endDate = new Date(dateRange.end);
-      endDate.setHours(23, 59, 59);
-      
-      // Для Firestore нужно использовать where с датами
-      // В реальном приложении лучше хранить createdAt как Timestamp
-    }
-    
     if (selectedCarrier !== 'Все') {
       baseQuery = query(baseQuery, where('carrier', '==', selectedCarrier));
     }
-    
     if (selectedStatus !== 'Все') {
       baseQuery = query(baseQuery, where('status', '==', selectedStatus));
     }
-    
     return baseQuery;
   };
 
   const filteredOrders = useMemo(() => {
-    // Клиентская фильтрация для дат (так как Firestore не поддерживает date range в реальном времени легко)
     return orders.filter(order => {
       const orderDate = order.createdAt?.seconds ? new Date(order.createdAt.seconds * 1000) : new Date(order.createdAt);
       if (isNaN(orderDate.getTime())) return false;
@@ -160,16 +151,25 @@ export default function AdminOrdersPage() {
     });
   }, [orders, dateRange, selectedCarrier, selectedStatus]);
 
-  // Остальные функции (handleDeleteOrder, toggleOrderSelection, etc.) остаются без изменений
+  // Применение фильтров при их изменении
+  useEffect(() => {
+    loadFirstPage();
+  }, [dateRange, selectedCarrier, selectedStatus]);
+
   const handleDeleteOrder = async (id: string) => {
     if (!window.confirm('Вы уверены, что хотите безвозвратно удалить этот заказ?')) return;
+    
+    setDeletingOrderId(id);
     try {
       await deleteDoc(doc(db, 'orders', id));
       setSelectedOrderDetails(null);
-      // Обновляем список
+      showToast('Заказ успешно удален', 'success');
       loadFirstPage();
     } catch (error) {
-      alert('Ошибка при удалении');
+      console.error('Error deleting order:', error);
+      showToast('Ошибка при удалении заказа', 'error');
+    } finally {
+      setDeletingOrderId(null);
     }
   };
 
@@ -193,36 +193,56 @@ export default function AdminOrdersPage() {
 
   const handleMassStatusChange = async (newStatus: string) => {
     if (selectedOrders.size === 0) return;
-    const batch = writeBatch(db);
-    selectedOrders.forEach(id => {
-      const orderRef = doc(db, 'orders', id);
-      const order = orders.find(o => o.id === id);
-      if (order) {
-        const updateData: any = {
-          status: newStatus,
-          lastUpdated: serverTimestamp()
-        };
-        if (newStatus === 'Завершен') updateData.shippedAt = serverTimestamp();
-        batch.update(orderRef, updateData);
-      }
-    });
-    await batch.commit();
-    setMassStatusMenuOpen(false);
-    setSelectedOrders(new Set());
-    // Обновляем список
-    loadFirstPage();
+    
+    setBulkUpdating(true);
+    try {
+      const batch = writeBatch(db);
+      selectedOrders.forEach(id => {
+        const orderRef = doc(db, 'orders', id);
+        const order = orders.find(o => o.id === id);
+        if (order) {
+          const updateData: any = {
+            status: newStatus,
+            lastUpdated: serverTimestamp()
+          };
+          if (newStatus === 'Завершен') updateData.shippedAt = serverTimestamp();
+          batch.update(orderRef, updateData);
+        }
+      });
+      await batch.commit();
+      
+      setMassStatusMenuOpen(false);
+      setSelectedOrders(new Set());
+      showToast(`Статус ${selectedOrders.size} заказов изменен на "${newStatus}"`, 'success');
+      loadFirstPage();
+    } catch (error) {
+      console.error('Error bulk updating status:', error);
+      showToast('Ошибка при массовом изменении статусов', 'error');
+    } finally {
+      setBulkUpdating(false);
+    }
   };
 
   const handleSingleStatusChange = async (id: string, newStatus: string) => {
-    const orderRef = doc(db, 'orders', id);
-    const updateData: any = { status: newStatus };
-    if (newStatus === 'Завершен') updateData.shippedAt = serverTimestamp();
-    await updateDoc(orderRef, updateData);
-    if (selectedOrderDetails?.id === id) {
-      setSelectedOrderDetails({ ...selectedOrderDetails, status: newStatus });
+    setUpdatingStatusId(id);
+    try {
+      const orderRef = doc(db, 'orders', id);
+      const updateData: any = { status: newStatus };
+      if (newStatus === 'Завершен') updateData.shippedAt = serverTimestamp();
+      await updateDoc(orderRef, updateData);
+      
+      if (selectedOrderDetails?.id === id) {
+        setSelectedOrderDetails({ ...selectedOrderDetails, status: newStatus });
+      }
+      
+      showToast(`Статус заказа изменен на "${newStatus}"`, 'success');
+      loadFirstPage();
+    } catch (error) {
+      console.error('Error updating status:', error);
+      showToast('Ошибка при изменении статуса', 'error');
+    } finally {
+      setUpdatingStatusId(null);
     }
-    // Обновляем список
-    loadFirstPage();
   };
 
   const formatAssemblyTime = (start: any, end: any) => {
@@ -249,7 +269,6 @@ export default function AdminOrdersPage() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      {/* Sticky Header with Back Button */}
       <header className="sticky top-0 z-30 bg-white border-b border-slate-200 px-4 py-3 shadow-sm">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -274,7 +293,7 @@ export default function AdminOrdersPage() {
       </header>
 
       <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
-        {/* Filters - без изменений */}
+        {/* Filters */}
         <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200 grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">От даты</label>
@@ -315,14 +334,26 @@ export default function AdminOrdersPage() {
           </div>
 
           <div className="relative w-full md:w-auto">
-            <button onClick={() => setMassStatusMenuOpen(!massStatusMenuOpen)} disabled={selectedOrders.size === 0}
-              className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-slate-900 text-white rounded-2xl text-sm font-bold hover:bg-black disabled:opacity-30 disabled:cursor-not-allowed transition-all shadow-lg shadow-slate-200">
-              Массовое изменение ({selectedOrders.size})
-              <ChevronDown className="w-4 h-4" />
+            <button 
+              onClick={() => setMassStatusMenuOpen(!massStatusMenuOpen)} 
+              disabled={selectedOrders.size === 0 || bulkUpdating}
+              className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-slate-900 text-white rounded-2xl text-sm font-bold hover:bg-black disabled:opacity-30 disabled:cursor-not-allowed transition-all shadow-lg shadow-slate-200"
+            >
+              {bulkUpdating ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Обновление...
+                </>
+              ) : (
+                <>
+                  Массовое изменение ({selectedOrders.size})
+                  <ChevronDown className="w-4 h-4" />
+                </>
+              )}
             </button>
             
             <AnimatePresence>
-              {massStatusMenuOpen && (
+              {massStatusMenuOpen && !bulkUpdating && (
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }}
                   className="absolute right-0 mt-3 w-56 bg-white rounded-2xl shadow-2xl border border-slate-100 overflow-hidden z-40 p-1">
                   {STATUSES.filter(s => s !== 'Все').map(status => (
@@ -351,7 +382,7 @@ export default function AdminOrdersPage() {
                   <th className="p-5">Сборщик</th>
                   <th className="p-5 text-center">Время</th>
                   <th className="p-5 text-right">Вес</th>
-                </tr>
+                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {loading ? (
@@ -430,14 +461,13 @@ export default function AdminOrdersPage() {
         </div>
       </div>
 
-      {/* Side Modal (Drawer Style) - без изменений */}
+      {/* Side Modal (Drawer Style) */}
       <AnimatePresence>
         {selectedOrderDetails && (
           <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedOrderDetails(null)}>
             <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }}
               onClick={(e) => e.stopPropagation()} className="bg-white h-full w-full max-w-lg shadow-2xl flex flex-col relative">
               
-              {/* Modal Header */}
               <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
                 <div>
                   <h2 className="text-2xl font-black text-slate-900 tracking-tight">Заказ {selectedOrderDetails.orderNumber}</h2>
@@ -457,19 +487,64 @@ export default function AdminOrdersPage() {
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {selectedOrderDetails.carrier === 'Самовывоз' && selectedOrderDetails.status === 'Готов к выдаче' && (
-                      <button onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Завершен')} className="px-5 py-2.5 bg-indigo-600 text-white text-xs font-bold rounded-xl shadow-md hover:bg-indigo-700 transition-all">ВЫДАТЬ (ЗАВЕРШИТЬ)</button>
+                      <button 
+                        onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Завершен')}
+                        disabled={updatingStatusId === selectedOrderDetails.id}
+                        className="px-5 py-2.5 bg-indigo-600 text-white text-xs font-bold rounded-xl shadow-md hover:bg-indigo-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                      >
+                        {updatingStatusId === selectedOrderDetails.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="w-4 h-4" />
+                        )}
+                        ВЫДАТЬ (ЗАВЕРШИТЬ)
+                      </button>
                     )}
                     {selectedOrderDetails.carrier !== 'Самовывоз' && selectedOrderDetails.status === 'Ожидает оформления' && (
-                      <button onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Оформлен')} className="px-5 py-2.5 bg-orange-500 text-white text-xs font-bold rounded-xl shadow-md hover:bg-orange-600 transition-all">ОФОРМИТЬ НАКЛАДНУЮ</button>
+                      <button 
+                        onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Оформлен')}
+                        disabled={updatingStatusId === selectedOrderDetails.id}
+                        className="px-5 py-2.5 bg-orange-500 text-white text-xs font-bold rounded-xl shadow-md hover:bg-orange-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                      >
+                        {updatingStatusId === selectedOrderDetails.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="w-4 h-4" />
+                        )}
+                        ОФОРМИТЬ НАКЛАДНУЮ
+                      </button>
                     )}
                     {selectedOrderDetails.status === 'Оформлен' && (
-                      <button onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Завершен')} className="px-5 py-2.5 bg-emerald-600 text-white text-xs font-bold rounded-xl shadow-md hover:bg-emerald-700 transition-all">ЗАВЕРШИТЬ ОТГРУЗКУ</button>
+                      <button 
+                        onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Завершен')}
+                        disabled={updatingStatusId === selectedOrderDetails.id}
+                        className="px-5 py-2.5 bg-emerald-600 text-white text-xs font-bold rounded-xl shadow-md hover:bg-emerald-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                      >
+                        {updatingStatusId === selectedOrderDetails.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="w-4 h-4" />
+                        )}
+                        ЗАВЕРШИТЬ ОТГРУЗКУ
+                      </button>
                     )}
                   </div>
-                  <select value={selectedOrderDetails.status} onChange={(e) => handleSingleStatusChange(selectedOrderDetails.id, e.target.value)}
-                    className="w-full bg-white border-2 border-blue-200 text-slate-900 text-sm font-bold rounded-2xl p-3 focus:ring-0 outline-none">
-                    {STATUSES.filter(s => s !== 'Все').map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
+                  
+                  <div className="relative">
+                    <select 
+                      value={selectedOrderDetails.status} 
+                      onChange={(e) => handleSingleStatusChange(selectedOrderDetails.id, e.target.value)}
+                      disabled={updatingStatusId === selectedOrderDetails.id}
+                      className="w-full bg-white border-2 border-blue-200 text-slate-900 text-sm font-bold rounded-2xl p-3 focus:ring-0 outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {STATUSES.filter(s => s !== 'Все').map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    {updatingStatusId === selectedOrderDetails.id && (
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                        <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Details Grid */}
@@ -528,10 +603,22 @@ export default function AdminOrdersPage() {
                 {/* Danger Zone */}
                 {user?.role === 'admin' && (
                   <div className="pt-6 border-t border-slate-100">
-                    <button onClick={() => handleDeleteOrder(selectedOrderDetails.id)}
-                      className="w-full flex items-center justify-center gap-2 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-black uppercase hover:bg-red-100 transition-all border border-red-100">
-                      <Trash2 size={16} />
-                      Удалить заказ навсегда
+                    <button 
+                      onClick={() => handleDeleteOrder(selectedOrderDetails.id)}
+                      disabled={deletingOrderId === selectedOrderDetails.id}
+                      className="w-full flex items-center justify-center gap-2 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-black uppercase hover:bg-red-100 transition-all border border-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {deletingOrderId === selectedOrderDetails.id ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Удаление...
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 size={16} />
+                          Удалить заказ навсегда
+                        </>
+                      )}
                     </button>
                   </div>
                 )}
