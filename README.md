@@ -160,10 +160,10 @@ wms-pro/
 └── tsconfig.json            # TypeScript configuration
 
 🔧 Environment Variables
-Variable	Description	Required
-GEMINI_API_KEY	Google Gemini AI API key	Yes
-APP_URL	Application URL (for callbacks)	Yes
-NEXT_PUBLIC_SUPER_ADMIN_EMAIL	Super admin email for bootstrapping	Yes
+Variable |	Description |	Required
+GEMINI_API_KEY |	Google Gemini AI API key |	Yes
+APP_URL |	Application URL (for callbacks) |	Yes
+NEXT_PUBLIC_SUPER_ADMIN_EMAIL |	Super admin email for bootstrapping |	Yes
 NEXT_PUBLIC_FIREBASE_API_KEY	Firebase API key	Yes
 NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN	Firebase auth domain	Yes
 NEXT_PUBLIC_FIREBASE_PROJECT_ID	Firebase project ID	Yes
