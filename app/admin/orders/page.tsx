@@ -49,6 +49,7 @@ export default function AdminOrdersPage() {
   const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null);
   const [updatingStatusId, setUpdatingStatusId] = useState<string | null>(null);
   const [bulkUpdating, setBulkUpdating] = useState(false);
+  const [savingFinance, setSavingFinance] = useState(false);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -89,7 +90,6 @@ export default function AdminOrdersPage() {
       
       let q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE));
       
-      // Применяем where условия
       for (const condition of conditions) {
         q = query(q, condition);
       }
@@ -155,7 +155,6 @@ export default function AdminOrdersPage() {
     }
   };
 
-  // Применение фильтров - перезагружаем данные
   useEffect(() => {
     if (initialLoadDone.current) {
       loadFirstPage();
@@ -169,7 +168,6 @@ export default function AdminOrdersPage() {
   const filteredOrders = useMemo(() => {
     let result = orders;
     
-    // Фильтр по дате
     result = result.filter(order => {
       const orderDate = order.createdAt?.seconds ? new Date(order.createdAt.seconds * 1000) : new Date(order.createdAt);
       if (isNaN(orderDate.getTime())) return false;
@@ -178,7 +176,6 @@ export default function AdminOrdersPage() {
       return isWithinInterval(orderDate, { start, end });
     });
     
-    // Фильтр по поисковому запросу (номер заказа)
     if (searchQuery.trim()) {
       const queryLower = searchQuery.trim().toLowerCase();
       result = result.filter(order => 
@@ -275,6 +272,31 @@ export default function AdminOrdersPage() {
     }
   };
 
+  const handleSaveFinance = async () => {
+    if (!selectedOrderDetails) return;
+    
+    setSavingFinance(true);
+    try {
+      const orderRef = doc(db, 'orders', selectedOrderDetails.id);
+      const paymentSum = selectedOrderDetails.payment_sum || 0;
+      const deliveryCost = selectedOrderDetails.delivery_cost || 0;
+      const profit = paymentSum - deliveryCost;
+      
+      await updateDoc(orderRef, {
+        payment_sum: paymentSum,
+        delivery_cost: deliveryCost,
+        profit: profit
+      });
+      
+      showToast('Финансовая информация сохранена', 'success');
+    } catch (error) {
+      console.error('Error saving finance:', error);
+      showToast('Ошибка при сохранении финансовой информации', 'error');
+    } finally {
+      setSavingFinance(false);
+    }
+  };
+
   const formatAssemblyTime = (start: any, end: any) => {
     if (!start || !end) return '-';
     const s = start.seconds ? start.seconds : new Date(start).getTime() / 1000;
@@ -329,7 +351,6 @@ export default function AdminOrdersPage() {
       <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
         {/* Поиск и фильтры */}
         <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200 space-y-4">
-          {/* Поиск по номеру заказа */}
           <div className="relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <input
@@ -349,7 +370,6 @@ export default function AdminOrdersPage() {
             )}
           </div>
           
-          {/* Остальные фильтры */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">От даты</label>
@@ -439,19 +459,20 @@ export default function AdminOrdersPage() {
                   <th className="p-5">Сборщик</th>
                   <th className="p-5 text-center">Время</th>
                   <th className="p-5 text-right">Вес</th>
+                  <th className="p-5 text-right">Прибыль</th>
                  </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {loading ? (
                   <tr>
-                    <td colSpan={8} className="p-20 text-center">
+                    <td colSpan={9} className="p-20 text-center">
                       <Loader2 className="w-8 h-8 animate-spin text-blue-600 mx-auto" />
                       <p className="text-slate-400 font-medium mt-2">Загрузка заказов...</p>
                     </td>
                   </tr>
                 ) : filteredOrders.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="p-20 text-center text-slate-400 font-medium">
+                    <td colSpan={9} className="p-20 text-center text-slate-400 font-medium">
                       {searchQuery ? 'Заказы не найдены по запросу' : 'Заказы не найдены за этот период'}
                     </td>
                   </tr>
@@ -480,6 +501,9 @@ export default function AdminOrdersPage() {
                       <td className="p-5 text-slate-600 text-xs font-medium truncate max-w-[120px]">{order.createdBy || 'Система'}</td>
                       <td className="p-5 text-center font-mono text-xs text-slate-500">{formatAssemblyTime(order.time_start, order.time_end)}</td>
                       <td className="p-5 text-right font-bold text-slate-900">{order.totalWeight ? `${Number(order.totalWeight).toFixed(1)} кг` : '—'}</td>
+                      <td className="p-5 text-right font-bold text-emerald-600">
+                        {order.profit ? `${order.profit.toLocaleString()} ₽` : '—'}
+                      </td>
                     </tr>
                   ))
                 )}
@@ -487,7 +511,6 @@ export default function AdminOrdersPage() {
             </table>
           </div>
           
-          {/* Pagination Controls */}
           {!loading && filteredOrders.length > 0 && hasMore && (
             <div className="flex items-center justify-center px-6 py-4 border-t border-slate-200 bg-slate-50/30">
               <button
@@ -512,7 +535,7 @@ export default function AdminOrdersPage() {
         </div>
       </div>
 
-      {/* Side Modal (Drawer Style) - без изменений */}
+      {/* Side Modal (Drawer Style) */}
       <AnimatePresence>
         {selectedOrderDetails && (
           <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedOrderDetails(null)}>
@@ -650,6 +673,83 @@ export default function AdminOrdersPage() {
                     </div>
                   </div>
                 )}
+
+                {/* Финансовая информация */}
+                <div className="pt-4 border-t border-slate-100 space-y-3">
+                  <h3 className="font-bold text-slate-900 flex items-center gap-2">
+                    <span className="text-sm">💰 Финансовая информация</span>
+                  </h3>
+                  
+                  {/* Сумма заказа без доставки */}
+                  <div className="flex items-center justify-between p-3 bg-blue-50 rounded-xl">
+                    <span className="text-blue-800 font-medium">Сумма заказа (без доставки):</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        value={selectedOrderDetails.payment_sum || ''}
+                        onChange={(e) => {
+                          const newPaymentSum = Number(e.target.value);
+                          const newProfit = newPaymentSum - (selectedOrderDetails.delivery_cost || 0);
+                          setSelectedOrderDetails({
+                            ...selectedOrderDetails,
+                            payment_sum: newPaymentSum,
+                            profit: newProfit
+                          });
+                        }}
+                        className="w-32 px-3 py-1 text-right font-bold text-slate-900 bg-white border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                        placeholder="0"
+                      />
+                      <span className="text-blue-900 font-bold">₽</span>
+                    </div>
+                  </div>
+                  
+                  {/* Стоимость доставки */}
+                  <div className="flex items-center justify-between p-3 bg-orange-50 rounded-xl">
+                    <span className="text-orange-800 font-medium">Стоимость доставки:</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        value={selectedOrderDetails.delivery_cost || ''}
+                        onChange={(e) => {
+                          const newDeliveryCost = Number(e.target.value);
+                          const newProfit = (selectedOrderDetails.payment_sum || 0) - newDeliveryCost;
+                          setSelectedOrderDetails({
+                            ...selectedOrderDetails,
+                            delivery_cost: newDeliveryCost,
+                            profit: newProfit
+                          });
+                        }}
+                        className="w-32 px-3 py-1 text-right font-bold text-slate-900 bg-white border border-orange-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                        placeholder="0"
+                      />
+                      <span className="text-orange-900 font-bold">₽</span>
+                    </div>
+                  </div>
+                  
+                  {/* Чистая прибыль */}
+                  <div className="flex items-center justify-between p-3 bg-emerald-50 rounded-xl">
+                    <span className="text-emerald-800 font-medium">Чистая прибыль:</span>
+                    <span className="text-emerald-900 font-bold text-lg">
+                      {((selectedOrderDetails.payment_sum || 0) - (selectedOrderDetails.delivery_cost || 0)).toLocaleString()} ₽
+                    </span>
+                  </div>
+                  
+                  {/* Кнопка сохранения финансов */}
+                  <button
+                    onClick={handleSaveFinance}
+                    disabled={savingFinance}
+                    className="w-full mt-2 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {savingFinance ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Сохранение...
+                      </>
+                    ) : (
+                      'Сохранить финансы'
+                    )}
+                  </button>
+                </div>
 
                 {/* Danger Zone */}
                 {user?.role === 'admin' && (
