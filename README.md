@@ -77,10 +77,11 @@ Awaiting Registration (for courier orders)
 ### Installation
 
 1. **Clone the repository**
-   ```bash
-   git clone https://github.com/yourusername/wms-pro.git
-   cd wms-pro
-   ```
+  
+```bash
+git clone https://github.com/yourusername/wms-pro.git
+cd wms-pro
+```
 
 2. **Install dependencies**
 
@@ -121,5 +122,53 @@ npm run dev
 yarn dev
 ```
 
+6. **Open your browser**
+Navigate to http://localhost:3000
+
+📁 Project Structure
+
+wms-pro/
+├── app/                      # Next.js app directory
+│   ├── admin/               # Admin-only pages
+│   │   ├── dashboard/       # Analytics dashboard
+│   │   ├── orders/          # Order management
+│   │   ├── users/           # User management
+│   │   ├── jambs/           # Error tracking
+│   │   └── reports/         # Excel reports
+│   ├── employee/            # Employee pages
+│   │   ├── add_order/       # Create new order
+│   │   ├── assembly/        # Assembly timer
+│   │   ├── add_dimensions/  # Dimensions input
+│   │   ├── add_money/       # Payment info
+│   │   ├── order_details/   # Order details view
+│   │   └── orders_by_date/  # Today's orders
+│   ├── login/               # Authentication page
+│   └── page.tsx             # Main dashboard
+├── components/              # Reusable components
+├── context/                 # React context providers
+│   └── AuthContext.tsx      # Authentication context
+├── lib/                     # Utility functions
+│   ├── firebase.ts          # Firebase configuration
+│   └── orders.ts            # Order operations
+├── hooks/                   # Custom React hooks
+├── public/                  # Static assets
+├── .env.example             # Environment variables template
+├── firebase-applet-config.json  # Firebase configuration
+├── firebase-blueprint.json  # Firestore schema
+├── package.json             # Dependencies
+├── tailwind.config.js       # Tailwind configuration
+└── tsconfig.json            # TypeScript configuration
+
+🔧 Environment Variables
+Variable	Description	Required
+GEMINI_API_KEY	Google Gemini AI API key	Yes
+APP_URL	Application URL (for callbacks)	Yes
+NEXT_PUBLIC_SUPER_ADMIN_EMAIL	Super admin email for bootstrapping	Yes
+NEXT_PUBLIC_FIREBASE_API_KEY	Firebase API key	Yes
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN	Firebase auth domain	Yes
+NEXT_PUBLIC_FIREBASE_PROJECT_ID	Firebase project ID	Yes
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET	Firebase storage bucket	Yes
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID	Firebase messaging sender ID	Yes
+NEXT_PUBLIC_FIREBASE_APP_ID	Firebase app ID	Yes
 
 
