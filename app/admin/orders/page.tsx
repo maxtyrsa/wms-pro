@@ -25,7 +25,7 @@ import { useRouter } from 'next/navigation';
 import { 
   CheckSquare, Square, X, ChevronDown, Package, 
   Clock, Hash, CheckCircle2, ArrowLeft, Trash2,
-  ChevronRight, Loader2, Search, XCircle
+  ChevronRight, Loader2, Search, XCircle, Wallet
 } from 'lucide-react';
 import { showToast } from '@/components/Toast';
 
@@ -312,8 +312,8 @@ export default function AdminOrdersPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead><tr className="bg-slate-50/50 text-slate-400 text-[11px] font-bold uppercase tracking-widest border-b border-slate-100">
-                <th className="p-5 w-14"></th><th className="p-5">Дата</th><th className="p-5">Заказ</th><th className="p-5">ТК</th><th className="p-5">Статус</th><th className="p-5">Сборщик</th><th className="p-5 text-center">Время</th><th className="p-5 text-right">Вес</th><th className="p-5 text-right">Прибыль</th>
-              </tr></thead>
+                <th className="p-5 w-14"></th><th className="p-5">Дата</th><th className="p-5">Заказ</th><th className="p-5">ТК</th><th className="p-5">Статус</th><th className="p-5">Сборщик</th><th className="p-5 text-center">Время</th><th className="p-5 text-right">Вес</th><th className="p-5 text-right">Сумма заказа</th>
+               </tr></thead>
               <tbody>
                 {loading ? (<tr><td colSpan={9} className="p-20 text-center"><Loader2 className="w-8 h-8 animate-spin text-blue-600 mx-auto" /><p className="text-slate-400 mt-2">Загрузка заказов...</p></td></tr>) : filteredOrders.length === 0 ? (<tr><td colSpan={9} className="p-20 text-center text-slate-400">{searchQuery ? 'Заказы не найдены по запросу' : 'Заказы не найдены за этот период'}</td></tr>) : filteredOrders.map(order => (<tr key={order.id} onClick={() => setSelectedOrderDetails(order)} className={`group hover:bg-blue-50/30 cursor-pointer ${selectedOrders.has(order.id) ? 'bg-blue-50' : ''}`}>
                   <td className="p-5" onClick={(e) => e.stopPropagation()}><button onClick={() => toggleOrderSelection(order.id)}>{selectedOrders.has(order.id) ? <CheckSquare className="w-6 h-6 text-blue-600" /> : <Square className="w-6 h-6 text-slate-200 group-hover:text-slate-300" />}</button></td>
@@ -324,7 +324,7 @@ export default function AdminOrdersPage() {
                   <td className="p-5 text-slate-600 text-xs truncate max-w-[120px]">{order.createdBy || 'Система'}</td>
                   <td className="p-5 text-center font-mono text-xs text-slate-500">{formatAssemblyTime(order.time_start, order.time_end)}</td>
                   <td className="p-5 text-right font-bold text-slate-900">{order.totalWeight ? `${Number(order.totalWeight).toFixed(1)} кг` : '—'}</td>
-                  <td className="p-5 text-right font-bold text-emerald-600">{order.profit ? `${order.profit.toLocaleString()} ₽` : '—'}</td>
+                  <td className="p-5 text-right font-bold text-emerald-600">{order.payment_sum ? `${order.payment_sum.toLocaleString()} ₽` : '—'}</td>
                 </tr>))}
               </tbody>
             </table>
@@ -333,7 +333,7 @@ export default function AdminOrdersPage() {
         </div>
       </div>
 
-      {/* Modal */}
+      {/* Модальное окно с деталями заказа */}
       <AnimatePresence>
         {selectedOrderDetails && (
           <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedOrderDetails(null)}>
@@ -372,8 +372,9 @@ export default function AdminOrdersPage() {
 
                 {/* ФИНАНСОВАЯ ИНФОРМАЦИЯ */}
                 <div className="pt-4 border-t border-slate-100 space-y-3">
-                  <h3 className="font-bold text-slate-900 flex items-center gap-2">💰 Финансовая информация</h3>
+                  <h3 className="font-bold text-slate-900 flex items-center gap-2"><Wallet className="w-5 h-5 text-emerald-500" /> Финансовая информация</h3>
                   
+                  {/* Сумма заказа (без доставки) */}
                   <div className="flex items-center justify-between p-3 bg-blue-50 rounded-xl">
                     <span className="text-blue-800 font-medium">Сумма заказа (без доставки):</span>
                     <div className="flex items-center gap-2">
@@ -382,6 +383,7 @@ export default function AdminOrdersPage() {
                     </div>
                   </div>
                   
+                  {/* Стоимость доставки */}
                   <div className="flex items-center justify-between p-3 bg-orange-50 rounded-xl">
                     <span className="text-orange-800 font-medium">Стоимость доставки:</span>
                     <div className="flex items-center gap-2">
@@ -390,11 +392,13 @@ export default function AdminOrdersPage() {
                     </div>
                   </div>
                   
+                  {/* Чистая прибыль */}
                   <div className="flex items-center justify-between p-3 bg-emerald-50 rounded-xl">
                     <span className="text-emerald-800 font-medium">Чистая прибыль:</span>
                     <span className="text-emerald-900 font-bold text-lg">{((selectedOrderDetails.payment_sum || 0) - (selectedOrderDetails.delivery_cost || 0)).toLocaleString()} ₽</span>
                   </div>
                   
+                  {/* Кнопка сохранения */}
                   <button onClick={handleSaveFinance} disabled={savingFinance} className="w-full mt-2 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
                     {savingFinance ? <><Loader2 className="w-4 h-4 animate-spin" /> Сохранение...</> : 'Сохранить финансы'}
                   </button>
