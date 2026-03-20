@@ -1,76 +1,165 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { ArrowLeft, Package, ChevronRight, Loader2 } from 'lucide-react';
-import { collection, query, where, orderBy, getDocs, limit, startAfter, QueryDocumentSnapshot } from 'firebase/firestore';
+import React, { useState, useEffect, useRef } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+import { doc, onSnapshot, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { startOfDay, endOfDay, format } from 'date-fns';
-import { ru } from 'date-fns/locale';
+import { useAuth } from '@/context/AuthContext';
+import { motion } from 'motion/react';
+import { 
+  ArrowLeft, 
+  Play, 
+  CheckCircle2, 
+  Clock, 
+  Package, 
+  Truck, 
+  Hash,
+  Loader2
+} from 'lucide-react';
 import Link from 'next/link';
+import { useToast } from '@/components/Toast';
 
-const PAGE_SIZE = 20;
+interface OrderData {
+  orderNumber?: string;
+  carrier: string;
+  quantity: number;
+  status: string;
+  time_start?: any;
+  time_end?: any;
+}
 
-export default function OrdersByDatePage() {
+export default function AssemblyPage() {
+  const { id } = useParams();
   const router = useRouter();
-  const [orders, setOrders] = useState<any[]>([]);
+  const { user } = useAuth();
+  const { showToast } = useToast();
+  
+  const [order, setOrder] = useState<OrderData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-  const [lastDoc, setLastDoc] = useState<QueryDocumentSnapshot | null>(null);
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const [starting, setStarting] = useState(false);
+  const [finishing, setFinishing] = useState(false);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    loadOrders();
-  }, []);
+    if (!id) return;
 
-  const loadOrders = async (loadMore = false) => {
-    if (loadMore) {
-      setLoadingMore(true);
-    } else {
-      setLoading(true);
-      setOrders([]);
-      setLastDoc(null);
-      setHasMore(true);
-    }
-
-    try {
-      const todayStart = startOfDay(new Date()).toISOString();
-      const todayEnd = endOfDay(new Date()).toISOString();
-      
-      let q = query(
-        collection(db, 'orders'),
-        where('createdAt', '>=', todayStart),
-        where('createdAt', '<=', todayEnd),
-        orderBy('createdAt', 'desc'),
-        limit(PAGE_SIZE)
-      );
-      
-      if (loadMore && lastDoc) {
-        q = query(q, startAfter(lastDoc));
-      }
-      
-      const snapshot = await getDocs(q);
-      const newOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      
-      if (loadMore) {
-        setOrders(prev => [...prev, ...newOrders]);
+    const docRef = doc(db, 'orders', id as string);
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data() as OrderData;
+        setOrder(data);
+        
+        if (data.time_start && !data.time_end) {
+          const startTime = data.time_start.toDate().getTime();
+          const updateTimer = () => {
+            const now = Date.now();
+            setElapsedTime(Math.floor((now - startTime) / 1000));
+          };
+          
+          updateTimer();
+          if (timerRef.current) clearInterval(timerRef.current);
+          timerRef.current = setInterval(updateTimer, 1000);
+        } else if (data.time_start && data.time_end) {
+          const start = data.time_start.toDate().getTime();
+          const end = data.time_end.toDate().getTime();
+          setElapsedTime(Math.floor((end - start) / 1000));
+          if (timerRef.current) clearInterval(timerRef.current);
+        } else {
+          setElapsedTime(0);
+          if (timerRef.current) clearInterval(timerRef.current);
+        }
       } else {
-        setOrders(newOrders);
+        console.error('Order not found');
       }
-      
-      if (snapshot.docs.length > 0) {
-        setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
-      }
-      setHasMore(snapshot.docs.length === PAGE_SIZE);
-    } catch (error) {
-      console.error('Error loading orders:', error);
-    } finally {
       setLoading(false);
-      setLoadingMore(false);
+    });
+
+    return () => {
+      unsubscribe();
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [id]);
+
+  const handleStart = async () => {
+    if (!id || !user) return;
+    setStarting(true);
+    try {
+      const docRef = doc(db, 'orders', id as string);
+      await updateDoc(docRef, {
+        time_start: serverTimestamp(),
+        status: 'В работе'
+      });
+      showToast('Сборка начата', 'success');
+    } catch (err) {
+      console.error('Error starting assembly:', err);
+      showToast('Ошибка при начале сборки', 'error');
+    } finally {
+      setStarting(false);
     }
   };
 
-  const loadMoreOrders = () => loadOrders(true);
+  const handleFinish = async () => {
+    if (!id || !user || !order) return;
+    setFinishing(true);
+    try {
+      const docRef = doc(db, 'orders', id as string);
+      
+      if (order.carrier === 'Самовывоз') {
+        await updateDoc(docRef, {
+          time_end: serverTimestamp(),
+          status: 'Готов к выдаче'
+        });
+        showToast('Сборка завершена! Заказ готов к выдаче', 'success');
+        router.push('/employee/orders_by_date');
+      } else {
+        await updateDoc(docRef, {
+          time_end: serverTimestamp(),
+          status: 'Комплектация'
+        });
+        showToast('Сборка завершена! Переход к вводу габаритов', 'success');
+        router.push(`/employee/add_dimensions/${id}`);
+      }
+    } catch (err) {
+      console.error('Error finishing assembly:', err);
+      showToast('Ошибка при завершении сборки', 'error');
+    } finally {
+      setFinishing(false);
+    }
+  };
+
+  const formatTime = (seconds: number) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return [
+      h > 0 ? h.toString().padStart(2, '0') : null,
+      m.toString().padStart(2, '0'),
+      s.toString().padStart(2, '0')
+    ].filter(Boolean).join(':');
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
+  if (!order) {
+    return (
+      <div className="min-h-screen p-4 bg-slate-50">
+        <div className="bg-white p-8 rounded-2xl text-center border border-slate-200">
+          <p className="text-slate-600">Заказ не найден</p>
+          <Link href="/" className="mt-4 text-blue-600 inline-block">Вернуться на главную</Link>
+        </div>
+      </div>
+    );
+  }
+
+  const isStarted = !!order.time_start;
+  const isFinished = !!order.time_end;
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20">
@@ -78,74 +167,97 @@ export default function OrdersByDatePage() {
         <button onClick={() => router.back()} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
           <ArrowLeft className="w-6 h-6 text-slate-600" />
         </button>
-        <div>
-          <h1 className="text-xl font-bold text-slate-900">Заказы за сегодня</h1>
-          <p className="text-sm text-slate-500">{format(new Date(), 'd MMMM yyyy', { locale: ru })}</p>
-        </div>
+        <h1 className="text-xl font-bold text-slate-900">Сборка заказа</h1>
       </header>
 
-      <main className="max-w-lg mx-auto p-4">
-        {loading ? (
-          <div className="p-8 text-center">
-            <Loader2 className="w-8 h-8 animate-spin text-blue-600 mx-auto" />
-            <p className="text-slate-400 mt-2">Загрузка заказов...</p>
-          </div>
-        ) : orders.length === 0 ? (
-          <div className="p-8 text-center text-slate-400">Заказов пока нет</div>
-        ) : (
-          <>
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden divide-y divide-slate-100">
-              {orders.map((order) => (
-                <Link
-                  key={order.id}
-                  href={`/employee/order_details/${order.id}`}
-                  className="flex items-center justify-between p-4 hover:bg-slate-50 transition-colors group"
-                >
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">
-                      <Package className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <p className="font-bold text-slate-900">{order.orderNumber || 'Без номера'}</p>
-                      <p className="text-xs text-slate-500">{order.carrier} · {order.quantity} мест</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${
-                      ['Готов к выдаче', 'Оформлен'].includes(order.status) ? 'bg-emerald-100 text-emerald-800' :
-                      ['Комплектация', 'В работе'].includes(order.status) ? 'bg-blue-100 text-blue-800' :
-                      order.status === 'Новый' ? 'bg-purple-100 text-purple-800' :
-                      order.status === 'Ожидает оформления' ? 'bg-amber-100 text-amber-800' :
-                      'bg-slate-100 text-slate-600'
-                    }`}>
-                      {order.status}
-                    </span>
-                    <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-slate-400 transition-colors" />
-                  </div>
-                </Link>
-              ))}
-            </div>
-            
-            {hasMore && (
-              <div className="mt-6 text-center">
-                <button
-                  onClick={loadMoreOrders}
-                  disabled={loadingMore}
-                  className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-all disabled:opacity-50 flex items-center justify-center gap-2 mx-auto"
-                >
-                  {loadingMore ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Загрузка...
-                    </>
-                  ) : (
-                    'Загрузить еще заказы'
-                  )}
-                </button>
+      <main className="max-w-lg mx-auto p-4 space-y-6">
+        <motion.div 
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 space-y-4"
+        >
+          <div className="flex justify-between items-start">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-slate-500 text-sm">
+                <Hash className="w-4 h-4" />
+                <span>Номер заказа</span>
               </div>
-            )}
-          </>
-        )}
+              <p className="text-xl font-bold text-slate-900">{order.orderNumber || 'Без номера'}</p>
+            </div>
+            <div className={`px-3 py-1 rounded-full text-xs font-bold ${
+              order.status === 'Собрано' ? 'bg-emerald-100 text-emerald-700' :
+              order.status === 'В работе' ? 'bg-blue-100 text-blue-700' :
+              'bg-slate-100 text-slate-600'
+            }`}>
+              {order.status}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-100">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-slate-500 text-sm">
+                <Truck className="w-4 h-4" />
+                <span>ТК</span>
+              </div>
+              <p className="font-semibold text-slate-900">{order.carrier}</p>
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-slate-500 text-sm">
+                <Package className="w-4 h-4" />
+                <span>Мест</span>
+              </div>
+              <p className="font-semibold text-slate-900">{order.quantity}</p>
+            </div>
+          </div>
+        </motion.div>
+
+        <div className="flex flex-col items-center justify-center py-12 space-y-4">
+          <div className="flex items-center gap-2 text-slate-400">
+            <Clock className="w-5 h-5" />
+            <span className="text-sm font-medium uppercase tracking-wider">Время сборки</span>
+          </div>
+          <div className="text-6xl font-mono font-bold text-slate-900 tabular-nums">
+            {formatTime(elapsedTime)}
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {!isStarted ? (
+            <button
+              onClick={handleStart}
+              disabled={starting}
+              className="w-full h-20 bg-blue-600 hover:bg-blue-700 text-white rounded-3xl font-bold text-xl shadow-lg shadow-blue-200 transition-all active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {starting ? (
+                <Loader2 className="w-6 h-6 animate-spin" />
+              ) : (
+                <Play className="w-6 h-6 fill-current" />
+              )}
+              {starting ? 'Запуск...' : 'Начать сборку'}
+            </button>
+          ) : !isFinished ? (
+            <button
+              onClick={handleFinish}
+              disabled={finishing}
+              className="w-full h-20 bg-emerald-600 hover:bg-emerald-700 text-white rounded-3xl font-bold text-xl shadow-lg shadow-emerald-200 transition-all active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {finishing ? (
+                <Loader2 className="w-6 h-6 animate-spin" />
+              ) : (
+                <CheckCircle2 className="w-6 h-6" />
+              )}
+              {finishing ? 'Завершение...' : 'Завершить сборку'}
+            </button>
+          ) : (
+            <button
+              disabled
+              className="w-full h-20 bg-slate-200 text-slate-500 rounded-3xl font-bold text-xl flex items-center justify-center gap-3 cursor-not-allowed"
+            >
+              <CheckCircle2 className="w-6 h-6" />
+              Сборка завершена
+            </button>
+          )}
+        </div>
       </main>
     </div>
   );
