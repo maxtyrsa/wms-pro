@@ -1,0 +1,130 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user of the WMS system.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "User's email address."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "employee"],
+          "description": "User's role in the system."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User's display name."
+        }
+      },
+      "required": ["email", "role"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A warehouse order.",
+      "type": "object",
+      "properties": {
+        "orderNumber": {
+          "type": "string",
+          "description": "Optional order number."
+        },
+        "quantity": {
+          "type": "number",
+          "description": "Number of items/places."
+        },
+        "carrier": {
+          "type": "string",
+          "enum": ["СДЭК", "ПЭК", "Деловые Линии", "Самовывоз", "Другое"],
+          "description": "Transport company."
+        },
+        "department": {
+          "type": "string",
+          "enum": ["MP", "KF", "Pack Stage"],
+          "description": "Warehouse department."
+        },
+        "status": {
+          "type": "string",
+          "description": "Current status of the order."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "createdBy": {
+          "type": "string",
+          "format": "email"
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "status": { "type": "string" },
+              "timestamp": { "type": "string", "format": "date-time" },
+              "user": { "type": "string" }
+            }
+          }
+        },
+        "time_start": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Assembly start time."
+        },
+        "time_end": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Assembly end time."
+        },
+        "places_data": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "l": { "type": "number" },
+              "w": { "type": "number" },
+              "h": { "type": "number" },
+              "weight": { "type": "number" }
+            }
+          }
+        },
+        "totalVolume": { "type": "number" },
+        "totalWeight": { "type": "number" },
+        "payment_sum": { "type": "number", "description": "Sum of payment from the customer." },
+        "delivery_cost": { "type": "number", "description": "Cost of delivery." },
+        "profit": { "type": "number", "description": "Net profit (payment_sum - delivery_cost)." }
+      },
+      "required": ["quantity", "carrier", "department", "status", "createdAt", "createdBy"]
+    },
+    "Jamb": {
+      "title": "Jamb",
+      "description": "An error or mistake made by an employee.",
+      "type": "object",
+      "properties": {
+        "employeeEmail": { "type": "string", "format": "email" },
+        "orderNumber": { "type": "string" },
+        "description": { "type": "string" },
+        "severity": { "type": "string", "enum": ["Low", "Medium", "High", "Critical"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string", "format": "email" }
+      },
+      "required": ["employeeEmail", "description", "severity", "createdAt", "createdBy"]
+    }
+  },
+  "firestore": {
+    "/users/{email}": {
+      "schema": "User",
+      "description": "Collection of authorized users indexed by email."
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Collection of warehouse orders."
+    },
+    "/jambs/{jambId}": {
+      "schema": "Jamb",
+      "description": "Collection of employee errors."
+    }
+  }
+}

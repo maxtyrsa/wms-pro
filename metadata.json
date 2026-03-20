@@ -1,0 +1,5 @@
+{
+  "name": "WMS Pro",
+  "description": "Warehouse Management System with Google Auth, Role-based access control, Order Assembly tracking, Dimensions input, Admin Dashboard with Recharts, JAMBS error tracking, and Excel reports.",
+  "requestFramePermissions": []
+}

@@ -1,0 +1,196 @@
+'use client';
+
+import React, { useState, useMemo } from 'react';
+import { useAuth } from '@/context/AuthContext';
+import { createOrderClient } from '@/lib/orders';
+import { motion } from 'motion/react';
+import { Package, Truck, Building2, Hash, ArrowLeft, Loader2 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+
+// Настройка связей Подразделение -> ТК
+const DEPT_CARRIERS: Record<string, string[]> = {
+  'KF': ['CDEK', 'DPD', 'Деловые линии', 'Почта России', 'ПЭК', 'Самовывоз'],
+  'MP': ['OZON_FBS', 'WB_FBS', 'Yandex Market', 'AliExpress', 'Ярмарка Мастеров', 'OZON_FBO', 'WB_FBO'],
+  'Pack Stage': ['CDEK', 'Самовывоз'] // Пример для Pack Stage
+};
+
+const DEPARTMENTS = Object.keys(DEPT_CARRIERS);
+
+export default function AddOrderPage() {
+  const { user } = useAuth();
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [formData, setFormData] = useState({
+    orderNumber: '',
+    quantity: '',
+    department: '', // Изначально пусто
+    carrier: '',    // Изначально пусто
+  });
+
+  // Получаем список ТК в зависимости от выбранного подразделения
+  const availableCarriers = useMemo(() => {
+    return formData.department ? DEPT_CARRIERS[formData.department] : [];
+  }, [formData.department]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user?.email || !formData.department || !formData.carrier) {
+      setError('Пожалуйста, выберите подразделение и ТК');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const result = await createOrderClient({
+        orderNumber: formData.orderNumber,
+        quantity: Number(formData.quantity),
+        carrier: formData.carrier,
+        department: formData.department,
+        userEmail: user.email,
+      });
+
+      // Логика редиректа
+      if (result.carrier === 'Самовывоз') {
+        router.push('/employee/orders_by_date');
+      } else {
+        router.push(`/employee/add_money/${result.id}`);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Ошибка при создании заказа');
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 pb-20">
+      <header className="bg-white border-b border-slate-200 px-4 py-4 sticky top-0 z-10 flex items-center gap-4">
+        <button onClick={() => router.back()} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+          <ArrowLeft className="w-6 h-6 text-slate-600" />
+        </button>
+        <h1 className="text-xl font-bold text-slate-900">Новый заказ</h1>
+      </header>
+
+      <main className="max-w-lg mx-auto p-4">
+        <motion.form 
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          onSubmit={handleSubmit}
+          className="space-y-6"
+        >
+          {error && (
+            <div className="p-4 bg-red-50 border border-red-100 text-red-700 rounded-xl text-sm font-medium">
+              {error}
+            </div>
+          )}
+
+          {/* 1. Номер заказа */}
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700 ml-1">
+              <Hash className="w-4 h-4 text-blue-500" />
+              Номер заказа
+            </label>
+            <input
+              type="text"
+              value={formData.orderNumber}
+              onChange={(e) => setFormData({ ...formData, orderNumber: e.target.value })}
+              placeholder="Например: 12345"
+              className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-lg focus:ring-2 focus:ring-blue-500 outline-none shadow-sm transition-all"
+            />
+          </div>
+
+          {/* 2. Количество мест */}
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700 ml-1">
+              <Package className="w-4 h-4 text-blue-500" />
+              Количество мест *
+            </label>
+            <input
+              type="number"
+              required
+              min="1"
+              value={formData.quantity}
+              onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
+              placeholder="0"
+              className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-lg focus:ring-2 focus:ring-blue-500 outline-none shadow-sm transition-all"
+            />
+          </div>
+
+          {/* 3. Подразделение */}
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700 ml-1">
+              <Building2 className="w-4 h-4 text-blue-500" />
+              Подразделение *
+            </label>
+            <div className="flex gap-2">
+              {DEPARTMENTS.map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setFormData({ ...formData, department: d, carrier: '' })} // Сбрасываем ТК при смене депа
+                  className={`flex-1 p-4 text-center rounded-2xl border transition-all text-sm font-bold shadow-sm ${
+                    formData.department === d 
+                      ? 'bg-slate-900 border-slate-900 text-white ring-2 ring-slate-300' 
+                      : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
+                  }`}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 4. Транспортная компания (динамическая) */}
+          <div className={`space-y-2 transition-opacity duration-300 ${!formData.department ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}>
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700 ml-1">
+              <Truck className="w-4 h-4 text-blue-500" />
+              Транспортная компания *
+            </label>
+            <div className="grid grid-cols-1 gap-2">
+              {availableCarriers.length > 0 ? (
+                availableCarriers.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setFormData({ ...formData, carrier: c })}
+                    className={`p-4 text-left rounded-2xl border transition-all flex items-center justify-between shadow-sm ${
+                      formData.carrier === c 
+                        ? 'bg-blue-50 border-blue-500 text-blue-700 ring-2 ring-blue-100' 
+                        : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+                    }`}
+                  >
+                    <span className="font-semibold">{c}</span>
+                    {formData.carrier === c && (
+                       <motion.div layoutId="dot" className="w-3 h-3 bg-blue-500 rounded-full shadow-sm" />
+                    )}
+                  </button>
+                ))
+              ) : (
+                <div className="text-center py-4 text-slate-400 text-sm italic border border-dashed border-slate-200 rounded-2xl">
+                  Сначала выберите подразделение
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="pt-4">
+            <button
+              type="submit"
+              disabled={loading || !formData.carrier}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-3xl font-bold text-xl shadow-xl shadow-blue-200 transition-all active:scale-[0.97] disabled:bg-slate-300 disabled:shadow-none flex items-center justify-center gap-3"
+            >
+              {loading ? (
+                <Loader2 className="w-7 h-7 animate-spin" />
+              ) : (
+                'Создать заказ'
+              )}
+            </button>
+          </div>
+        </motion.form>
+      </main>
+    </div>
+  );
+}

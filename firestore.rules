@@ -1,0 +1,115 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: email (string)
+    // Fields:
+    //   - email: string (required)
+    //   - role: string (required, 'admin' | 'employee')
+    //   - displayName: string (optional)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isEmailOwner(email) {
+      return isAuthenticated() && request.auth.token.email.lower() == email.lower();
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        (request.auth.token.email.lower() == "maximtyrsa89@gmail.com" && request.auth.token.email_verified == true) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.token.email.lower())) && 
+         get(/databases/$(database)/documents/users/$(request.auth.token.email.lower())).data.role == 'admin')
+      );
+    }
+
+    function isEmployee() {
+      return isAuthenticated() && (
+        (request.auth.token.email.lower() == "maximtyrsa89@gmail.com" && request.auth.token.email_verified == true) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.token.email.lower())) && 
+         get(/databases/$(database)/documents/users/$(request.auth.token.email.lower())).data.role in ['admin', 'employee'])
+      );
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'role']) &&
+             data.email is string &&
+             data.role in ['admin', 'employee'] &&
+             data.keys().hasOnly(['email', 'role', 'displayName']);
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll(['quantity', 'carrier', 'department', 'status', 'createdAt', 'createdBy']) &&
+             data.quantity is number &&
+             data.carrier is string &&
+             data.department is string &&
+             data.status is string &&
+             data.createdAt is string &&
+             data.createdBy is string &&
+             (data.orderNumber == null || data.orderNumber is string) &&
+             (!('time_start' in data) || data.time_start is timestamp) &&
+             (!('time_end' in data) || data.time_end is timestamp) &&
+             (!('places_data' in data) || data.places_data is list) &&
+             (!('totalVolume' in data) || data.totalVolume is number) &&
+             (!('totalWeight' in data) || data.totalWeight is number) &&
+             (!('payment_sum' in data) || data.payment_sum is number) &&
+             (!('delivery_cost' in data) || data.delivery_cost is number) &&
+             (!('profit' in data) || data.profit is number);
+    }
+
+    function isValidJamb(data) {
+      return data.keys().hasAll(['employeeEmail', 'description', 'severity', 'createdAt', 'createdBy']) &&
+             data.employeeEmail is string &&
+             data.description is string &&
+             data.severity in ['Low', 'Medium', 'High', 'Critical'] &&
+             data.createdAt is string &&
+             data.createdBy is string &&
+             (!('orderNumber' in data) || data.orderNumber is string);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{email} {
+      // Users can read their own profile to check roles
+      allow read: if isEmailOwner(email) || isAdmin();
+      
+      // Only admins can manage users
+      allow create, update: if isAdmin() && isValidUser(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /orders/{orderId} {
+      allow read: if isEmployee();
+      allow create: if isEmployee() && isValidOrder(request.resource.data);
+      allow update: if isEmployee() && isValidOrder(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /jambs/{jambId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && isValidJamb(request.resource.data);
+      allow update: if isAdmin() && isValidJamb(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
