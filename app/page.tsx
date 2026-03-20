@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { motion } from 'motion/react';
 import { startOfDay, endOfDay, differenceInSeconds, format } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { LogOut, Package, Users, LayoutDashboard, ChevronRight, ShieldAlert, FileSpreadsheet, ClipboardList, Clock } from 'lucide-react';
+import { LogOut, Package, Users, LayoutDashboard, ShieldAlert, FileSpreadsheet, ClipboardList, Clock, Truck, TrendingUp } from 'lucide-react';
 import Link from 'next/link';
 import { collection, query, orderBy, limit, onSnapshot, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
@@ -118,7 +118,7 @@ export default function DashboardPage() {
       </nav>
 
       <main className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
-        <header className="mb-8 flex items-center justify-between">
+        <header className="mb-8 flex items-center justify-between flex-wrap gap-4">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Панель управления</h1>
             <p className="text-slate-500">Добро пожаловать в систему управления складом.</p>
@@ -147,78 +147,87 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* Admin Navigation Cards */}
         {role === 'admin' && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-8">
-            <Link 
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
+            <NavCard 
               href="/admin/dashboard"
-              className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4 hover:bg-slate-50 transition-all group"
-            >
-              <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform">
-                <LayoutDashboard className="w-5 h-5" />
-              </div>
-              <div>
-                <p className="font-bold text-slate-900">Админ-панель</p>
-                <p className="text-xs text-slate-500">Статистика и графики</p>
-              </div>
-            </Link>
-            <Link 
+              icon={<LayoutDashboard />}
+              title="Админ-панель"
+              description="Статистика и графики"
+              color="blue"
+            />
+            <NavCard 
               href="/admin/orders"
-              className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4 hover:bg-slate-50 transition-all group"
-            >
-              <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform">
-                <ClipboardList className="w-5 h-5" />
-              </div>
-              <div>
-                <p className="font-bold text-slate-900">Заказы</p>
-                <p className="text-xs text-slate-500">Управление заказами</p>
-              </div>
-            </Link>
-            <Link 
+              icon={<ClipboardList />}
+              title="Заказы"
+              description="Управление заказами"
+              color="indigo"
+            />
+            <NavCard 
               href="/admin/users"
-              className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4 hover:bg-slate-50 transition-all group"
-            >
-              <div className="w-10 h-10 bg-purple-50 text-purple-600 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform">
-                <Users className="w-5 h-5" />
-              </div>
-              <div>
-                <p className="font-bold text-slate-900">Пользователи</p>
-                <p className="text-xs text-slate-500">Управление доступом</p>
-              </div>
-            </Link>
-            <Link 
+              icon={<Users />}
+              title="Пользователи"
+              description="Управление доступом"
+              color="purple"
+            />
+            <NavCard 
               href="/admin/jambs"
-              className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4 hover:bg-slate-50 transition-all group"
-            >
-              <div className="w-10 h-10 bg-red-50 text-red-600 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform">
-                <ShieldAlert className="w-5 h-5" />
-              </div>
-              <div>
-                <p className="font-bold text-slate-900">Модуль JAMBS</p>
-                <p className="text-xs text-slate-500">Ошибки сотрудников</p>
-              </div>
-            </Link>
-            <Link 
+              icon={<ShieldAlert />}
+              title="Модуль JAMBS"
+              description="Ошибки сотрудников"
+              color="red"
+            />
+            <NavCard 
               href="/admin/reports"
-              className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4 hover:bg-slate-50 transition-all group"
-            >
-              <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform">
-                <FileSpreadsheet className="w-5 h-5" />
-              </div>
-              <div>
-                <p className="font-bold text-slate-900">Отчеты</p>
-                <p className="text-xs text-slate-500">Экспорт в Excel</p>
-              </div>
-            </Link>
+              icon={<FileSpreadsheet />}
+              title="Отчеты"
+              description="Экспорт в Excel"
+              color="emerald"
+            />
+            <NavCard 
+              href="/admin/pickup_orders"
+              icon={<Truck />}
+              title="Самовывоз"
+              description="Управление выдачей"
+              color="orange"
+            />
           </div>
         )}
 
+        {/* Employee Navigation Cards */}
+        {role === 'employee' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
+            <NavCard 
+              href="/employee/orders_by_date"
+              icon={<ClipboardList />}
+              title="Заказы сегодня"
+              description="Список заказов"
+              color="blue"
+            />
+            <NavCard 
+              href="/employee/pickup_orders"
+              icon={<Truck />}
+              title="Самовывоз"
+              description="Заказы к выдаче"
+              color="emerald"
+            />
+          </div>
+        )}
+
+        {/* Active Orders List */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="p-4 border-b border-slate-100 flex items-center justify-between">
             <div>
               <h2 className="font-semibold text-slate-900">Активные заказы</h2>
               <p className="text-sm text-slate-500 mt-1">{format(new Date(), 'd MMMM yyyy', { locale: ru })}</p>
             </div>
-            <Link href="/employee/orders_by_date" className="text-sm text-blue-600 font-medium hover:underline">Все заказы</Link>
+            {role === 'employee' && (
+              <Link href="/employee/orders_by_date" className="text-sm text-blue-600 font-medium hover:underline">Все заказы</Link>
+            )}
+            {role === 'admin' && (
+              <Link href="/admin/orders" className="text-sm text-blue-600 font-medium hover:underline">Все заказы</Link>
+            )}
           </div>
           <div className="p-0">
             {ordersLoading ? (
@@ -227,10 +236,10 @@ export default function DashboardPage() {
               <div className="p-8 text-center text-slate-400">Заказов пока нет</div>
             ) : (
               <div className="divide-y divide-slate-100">
-                {todayOrders.map((order) => (
+                {todayOrders.slice(0, 10).map((order) => (
                   <Link 
                     key={order.id} 
-                    href={`/employee/order_details/${order.id}`}
+                    href={role === 'admin' ? `/admin/orders/${order.id}` : `/employee/order_details/${order.id}`}
                     className="flex items-center justify-between p-4 hover:bg-slate-50 transition-colors group"
                   >
                     <div className="flex items-center gap-4">
@@ -252,10 +261,20 @@ export default function DashboardPage() {
                       }`}>
                         {order.status}
                       </span>
-                      <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-slate-400 transition-colors" />
+                      <ChevronRightIcon className="w-4 h-4 text-slate-300 group-hover:text-slate-400 transition-colors" />
                     </div>
                   </Link>
                 ))}
+              </div>
+            )}
+            {todayOrders.length > 10 && (
+              <div className="p-4 text-center border-t border-slate-100">
+                <Link 
+                  href={role === 'admin' ? "/admin/orders" : "/employee/orders_by_date"}
+                  className="text-sm text-blue-600 font-medium hover:underline"
+                >
+                  Показать все {todayOrders.length} заказов
+                </Link>
               </div>
             )}
           </div>
@@ -284,5 +303,39 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode, label:
       <p className="text-sm text-slate-500 font-medium">{label}</p>
       <p className="text-3xl font-bold text-slate-900 mt-1">{value}</p>
     </motion.div>
+  );
+}
+
+function NavCard({ href, icon, title, description, color }: { href: string; icon: React.ReactNode; title: string; description: string; color: string }) {
+  const colorMap: any = {
+    blue: 'bg-blue-50 text-blue-600',
+    indigo: 'bg-indigo-50 text-indigo-600',
+    purple: 'bg-purple-50 text-purple-600',
+    red: 'bg-red-50 text-red-600',
+    emerald: 'bg-emerald-50 text-emerald-600',
+    orange: 'bg-orange-50 text-orange-600',
+  };
+
+  return (
+    <Link 
+      href={href}
+      className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4 hover:bg-slate-50 transition-all group"
+    >
+      <div className={`w-10 h-10 ${colorMap[color]} rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform`}>
+        {React.isValidElement(icon) ? React.cloneElement(icon as React.ReactElement<any>, { className: 'w-5 h-5' }) : icon}
+      </div>
+      <div>
+        <p className="font-bold text-slate-900">{title}</p>
+        <p className="text-xs text-slate-500">{description}</p>
+      </div>
+    </Link>
+  );
+}
+
+function ChevronRightIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
   );
 }
