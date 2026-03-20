@@ -1,20 +1,43 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+WMS Pro is a comprehensive warehouse management system designed for efficient order processing, assembly tracking, and team performance monitoring. Built with Next.js and Firebase, it provides real-time inventory management with role-based access for administrators and employees.
 
-# Run and deploy your AI Studio app
+## Key Features
 
-This contains everything you need to run your app locally.
+### 👥 Role-Based Access Control
+- **Admin Panel**: Complete system control, user management, analytics, and reporting
+- **Employee Portal**: Order assembly, dimensions input, and personal performance tracking
 
-View your app in AI Studio: https://ai.studio/apps/05925b54-c8dc-4b45-a977-a855b2d9cc42
+### 📦 Order Management
+- Create and track orders with multiple carriers (CDEK, DPD, OZON, Wildberries, etc.)
+- Support for different departments (KF, MP, Pack Stage)
+- Order status workflow: New → Assembly → Awaiting → Ready → Completed
 
-## Run Locally
+### ⏱️ Assembly Timer
+- Real-time assembly time tracking
+- Automatic time calculation and reporting
+- Performance metrics per employee
 
-**Prerequisites:**  Node.js
+### 📊 Analytics & Reporting
+- Interactive dashboards with Recharts
+- Employee efficiency tracking
+- JAMBS module for error tracking
+- Export reports to Excel (XLSX)
 
+### 🏢 Multi-Department Support
+- Different carrier assignments per department
+- Flexible workflow configuration
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+### 🔒 Security
+- Google Authentication
+- Firestore security rules
+- Role-based access control
+- Data validation and type safety
+
+## Tech Stack
+
+- **Frontend**: Next.js 15, React 19, TypeScript, Tailwind CSS
+- **Backend**: Firebase (Auth, Firestore)
+- **Charts**: Recharts
+- **Animations**: Motion (Framer Motion)
+- **Excel Export**: ExcelJS
+- **Icons**: Lucide React
+- **Date Handling**: date-fns
