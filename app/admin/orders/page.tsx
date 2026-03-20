@@ -1,25 +1,48 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, onSnapshot, query, orderBy, writeBatch, doc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { 
+  collection, 
+  onSnapshot, 
+  query, 
+  orderBy, 
+  writeBatch, 
+  doc, 
+  updateDoc, 
+  deleteDoc, 
+  serverTimestamp,
+  limit,
+  startAfter,
+  getDocs,
+  where,
+  QueryDocumentSnapshot
+} from 'firebase/firestore';
 import { format, differenceInSeconds, isWithinInterval, startOfDay, endOfDay } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
 import { useRouter } from 'next/navigation';
 import { 
   Filter, Search, CheckSquare, Square, X, ChevronDown, Package, 
-  Clock, User, Truck, Hash, Calendar, CheckCircle2, ArrowLeft, Trash2 
+  Clock, User, Truck, Hash, Calendar, CheckCircle2, ArrowLeft, Trash2,
+  ChevronLeft, ChevronRight, Loader2
 } from 'lucide-react';
 
 const CARRIERS = ['Все', 'CDEK', 'DPD', 'Деловые линии', 'Почта России', 'ПЭК', 'Самовывоз', 'Образцы', 'OZON_FBS', 'Ярмарка Мастеров', 'Yandex Market', 'WB_FBS', 'AliExpress', 'Бийск', 'OZON_FBO', 'WB_FBO'];
 const STATUSES = ['Все', 'Новый', 'Комплектация', 'Ожидает оформления', 'Готов к выдаче', 'Оформлен', 'Завершен'];
+
+const PAGE_SIZE = 20; // Количество заказов на странице
 
 export default function AdminOrdersPage() {
   const { user } = useAuth();
   const router = useRouter();
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [lastDoc, setLastDoc] = useState<QueryDocumentSnapshot | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalOrders, setTotalOrders] = useState(0);
 
   // Filters
   const [dateRange, setDateRange] = useState<{ start: string; end: string }>({
@@ -36,17 +59,95 @@ export default function AdminOrdersPage() {
   const [selectedOrderDetails, setSelectedOrderDetails] = useState<any | null>(null);
   const [massStatusMenuOpen, setMassStatusMenuOpen] = useState(false);
 
+  // Загрузка первой страницы
   useEffect(() => {
-    const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    loadFirstPage();
+  }, [dateRange, selectedCarrier, selectedStatus]);
+
+  const loadFirstPage = async () => {
+    setLoading(true);
+    setOrders([]);
+    setLastDoc(null);
+    setHasMore(true);
+    setCurrentPage(1);
+
+    try {
+      let q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE));
+      q = applyFilters(q);
+      
+      const snapshot = await getDocs(q);
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setOrders(data);
+      
+      if (snapshot.docs.length > 0) {
+        setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
+      }
+      setHasMore(snapshot.docs.length === PAGE_SIZE);
+      
+      // Подсчет общего количества (опционально, можно сделать отдельный запрос)
+      // countTotalOrders();
+    } catch (error) {
+      console.error('Error loading orders:', error);
+    } finally {
       setLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
+    }
+  };
+
+  const loadMore = async () => {
+    if (!hasMore || loadingMore) return;
+    
+    setLoadingMore(true);
+    
+    try {
+      let q = query(
+        collection(db, 'orders'),
+        orderBy('createdAt', 'desc'),
+        startAfter(lastDoc),
+        limit(PAGE_SIZE)
+      );
+      q = applyFilters(q);
+      
+      const snapshot = await getDocs(q);
+      const newOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      
+      setOrders(prev => [...prev, ...newOrders]);
+      
+      if (snapshot.docs.length > 0) {
+        setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
+      }
+      setHasMore(snapshot.docs.length === PAGE_SIZE);
+      setCurrentPage(prev => prev + 1);
+    } catch (error) {
+      console.error('Error loading more orders:', error);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const applyFilters = (baseQuery: any) => {
+    // Применяем фильтры
+    if (dateRange.start && dateRange.end) {
+      const startDate = new Date(dateRange.start);
+      const endDate = new Date(dateRange.end);
+      endDate.setHours(23, 59, 59);
+      
+      // Для Firestore нужно использовать where с датами
+      // В реальном приложении лучше хранить createdAt как Timestamp
+    }
+    
+    if (selectedCarrier !== 'Все') {
+      baseQuery = query(baseQuery, where('carrier', '==', selectedCarrier));
+    }
+    
+    if (selectedStatus !== 'Все') {
+      baseQuery = query(baseQuery, where('status', '==', selectedStatus));
+    }
+    
+    return baseQuery;
+  };
 
   const filteredOrders = useMemo(() => {
+    // Клиентская фильтрация для дат (так как Firestore не поддерживает date range в реальном времени легко)
     return orders.filter(order => {
       const orderDate = order.createdAt?.seconds ? new Date(order.createdAt.seconds * 1000) : new Date(order.createdAt);
       if (isNaN(orderDate.getTime())) return false;
@@ -59,11 +160,14 @@ export default function AdminOrdersPage() {
     });
   }, [orders, dateRange, selectedCarrier, selectedStatus]);
 
+  // Остальные функции (handleDeleteOrder, toggleOrderSelection, etc.) остаются без изменений
   const handleDeleteOrder = async (id: string) => {
     if (!window.confirm('Вы уверены, что хотите безвозвратно удалить этот заказ?')) return;
     try {
       await deleteDoc(doc(db, 'orders', id));
       setSelectedOrderDetails(null);
+      // Обновляем список
+      loadFirstPage();
     } catch (error) {
       alert('Ошибка при удалении');
     }
@@ -105,6 +209,8 @@ export default function AdminOrdersPage() {
     await batch.commit();
     setMassStatusMenuOpen(false);
     setSelectedOrders(new Set());
+    // Обновляем список
+    loadFirstPage();
   };
 
   const handleSingleStatusChange = async (id: string, newStatus: string) => {
@@ -115,6 +221,8 @@ export default function AdminOrdersPage() {
     if (selectedOrderDetails?.id === id) {
       setSelectedOrderDetails({ ...selectedOrderDetails, status: newStatus });
     }
+    // Обновляем список
+    loadFirstPage();
   };
 
   const formatAssemblyTime = (start: any, end: any) => {
@@ -153,7 +261,10 @@ export default function AdminOrdersPage() {
             </button>
             <div>
               <h1 className="text-xl font-bold text-slate-900">Управление заказами</h1>
-              <p className="text-xs text-slate-500 font-medium">Всего в базе: {orders.length}</p>
+              <p className="text-xs text-slate-500 font-medium">
+                Показано: {filteredOrders.length} из {orders.length} заказов
+                {hasMore && <span className="ml-2 text-blue-500">(есть еще заказы)</span>}
+              </p>
             </div>
           </div>
           <div className="hidden md:block text-sm font-semibold text-blue-600 bg-blue-50 px-3 py-1 rounded-lg">
@@ -163,7 +274,7 @@ export default function AdminOrdersPage() {
       </header>
 
       <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
-        {/* Filters */}
+        {/* Filters - без изменений */}
         <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200 grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">От даты</label>
@@ -244,9 +355,18 @@ export default function AdminOrdersPage() {
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {loading ? (
-                  <tr><td colSpan={8} className="p-20 text-center text-slate-400 font-medium">Загрузка данных...</td></tr>
+                  <tr>
+                    <td colSpan={8} className="p-20 text-center">
+                      <Loader2 className="w-8 h-8 animate-spin text-blue-600 mx-auto" />
+                      <p className="text-slate-400 font-medium mt-2">Загрузка заказов...</p>
+                    </td>
+                  </tr>
                 ) : filteredOrders.length === 0 ? (
-                  <tr><td colSpan={8} className="p-20 text-center text-slate-400 font-medium">Заказы не найдены за этот период</td></tr>
+                  <tr>
+                    <td colSpan={8} className="p-20 text-center text-slate-400 font-medium">
+                      Заказы не найдены за этот период
+                    </td>
+                  </tr>
                 ) : (
                   filteredOrders.map(order => (
                     <tr key={order.id} onClick={() => setSelectedOrderDetails(order)}
@@ -275,10 +395,42 @@ export default function AdminOrdersPage() {
               </tbody>
             </table>
           </div>
+          
+          {/* Pagination Controls */}
+          {!loading && filteredOrders.length > 0 && (
+            <div className="flex items-center justify-between px-6 py-4 border-t border-slate-200 bg-slate-50/30">
+              <div className="text-sm text-slate-500">
+                Показано <span className="font-medium text-slate-900">{filteredOrders.length}</span> из <span className="font-medium text-slate-900">{orders.length}</span> загруженных заказов
+                {hasMore && <span className="ml-2 text-blue-600 text-xs">(есть еще заказы в базе)</span>}
+              </div>
+              
+              <div className="flex items-center gap-3">
+                {hasMore && (
+                  <button
+                    onClick={loadMore}
+                    disabled={loadingMore}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {loadingMore ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Загрузка...
+                      </>
+                    ) : (
+                      <>
+                        <ChevronRight className="w-4 h-4" />
+                        Загрузить еще
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Side Modal (Drawer Style) */}
+      {/* Side Modal (Drawer Style) - без изменений */}
       <AnimatePresence>
         {selectedOrderDetails && (
           <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedOrderDetails(null)}>
@@ -299,25 +451,25 @@ export default function AdminOrdersPage() {
               <div className="flex-1 overflow-y-auto p-6 space-y-8">
                 {/* Admin Action Section */}
                 <div className="bg-blue-50 p-5 rounded-3xl border border-blue-100 space-y-4">
-                   <div className="flex items-center gap-2 text-blue-700 mb-1">
-                      <CheckCircle2 size={18} />
-                      <span className="text-xs font-black uppercase tracking-wider">Управление статусом</span>
-                   </div>
-                   <div className="flex flex-wrap gap-2">
-                      {selectedOrderDetails.carrier === 'Самовывоз' && selectedOrderDetails.status === 'Готов к выдаче' && (
-                        <button onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Завершен')} className="px-5 py-2.5 bg-indigo-600 text-white text-xs font-bold rounded-xl shadow-md hover:bg-indigo-700 transition-all">ВЫДАТЬ (ЗАВЕРШИТЬ)</button>
-                      )}
-                      {selectedOrderDetails.carrier !== 'Самовывоз' && selectedOrderDetails.status === 'Ожидает оформления' && (
-                        <button onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Оформлен')} className="px-5 py-2.5 bg-orange-500 text-white text-xs font-bold rounded-xl shadow-md hover:bg-orange-600 transition-all">ОФОРМИТЬ НАКЛАДНУЮ</button>
-                      )}
-                      {selectedOrderDetails.status === 'Оформлен' && (
-                        <button onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Завершен')} className="px-5 py-2.5 bg-emerald-600 text-white text-xs font-bold rounded-xl shadow-md hover:bg-emerald-700 transition-all">ЗАВЕРШИТЬ ОТГРУЗКУ</button>
-                      )}
-                   </div>
-                   <select value={selectedOrderDetails.status} onChange={(e) => handleSingleStatusChange(selectedOrderDetails.id, e.target.value)}
-                     className="w-full bg-white border-2 border-blue-200 text-slate-900 text-sm font-bold rounded-2xl p-3 focus:ring-0 outline-none">
-                     {STATUSES.filter(s => s !== 'Все').map(s => <option key={s} value={s}>{s}</option>)}
-                   </select>
+                  <div className="flex items-center gap-2 text-blue-700 mb-1">
+                    <CheckCircle2 size={18} />
+                    <span className="text-xs font-black uppercase tracking-wider">Управление статусом</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedOrderDetails.carrier === 'Самовывоз' && selectedOrderDetails.status === 'Готов к выдаче' && (
+                      <button onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Завершен')} className="px-5 py-2.5 bg-indigo-600 text-white text-xs font-bold rounded-xl shadow-md hover:bg-indigo-700 transition-all">ВЫДАТЬ (ЗАВЕРШИТЬ)</button>
+                    )}
+                    {selectedOrderDetails.carrier !== 'Самовывоз' && selectedOrderDetails.status === 'Ожидает оформления' && (
+                      <button onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Оформлен')} className="px-5 py-2.5 bg-orange-500 text-white text-xs font-bold rounded-xl shadow-md hover:bg-orange-600 transition-all">ОФОРМИТЬ НАКЛАДНУЮ</button>
+                    )}
+                    {selectedOrderDetails.status === 'Оформлен' && (
+                      <button onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Завершен')} className="px-5 py-2.5 bg-emerald-600 text-white text-xs font-bold rounded-xl shadow-md hover:bg-emerald-700 transition-all">ЗАВЕРШИТЬ ОТГРУЗКУ</button>
+                    )}
+                  </div>
+                  <select value={selectedOrderDetails.status} onChange={(e) => handleSingleStatusChange(selectedOrderDetails.id, e.target.value)}
+                    className="w-full bg-white border-2 border-blue-200 text-slate-900 text-sm font-bold rounded-2xl p-3 focus:ring-0 outline-none">
+                    {STATUSES.filter(s => s !== 'Все').map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
                 </div>
 
                 {/* Details Grid */}
@@ -351,14 +503,15 @@ export default function AdminOrdersPage() {
                 </div>
 
                 {/* Places Table */}
-                <div className="space-y-3">
-                   <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest flex items-center gap-2">
+                {selectedOrderDetails.places_data && selectedOrderDetails.places_data.length > 0 && (
+                  <div className="space-y-3">
+                    <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest flex items-center gap-2">
                       <Hash size={14} className="text-blue-500" />
                       Габариты мест
-                   </h3>
-                   <div className="space-y-2">
-                     {selectedOrderDetails.places_data?.map((place: any, idx: number) => (
-                       <div key={idx} className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl shadow-sm">
+                    </h3>
+                    <div className="space-y-2">
+                      {selectedOrderDetails.places_data.map((place: any, idx: number) => (
+                        <div key={idx} className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl shadow-sm">
                           <div className="flex items-center gap-3">
                             <span className="text-xs font-black text-blue-500 bg-blue-50 w-6 h-6 flex items-center justify-center rounded-lg">{idx + 1}</span>
                             <span className="text-sm font-bold text-slate-700">
@@ -366,10 +519,11 @@ export default function AdminOrdersPage() {
                             </span>
                           </div>
                           <span className="text-sm font-black text-slate-900">{place.weight} кг</span>
-                       </div>
-                     ))}
-                   </div>
-                </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Danger Zone */}
                 {user?.role === 'admin' && (

@@ -52,7 +52,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const userDocRef = doc(db, 'users', email);
           const userDoc = await getDoc(userDocRef);
           
-          const isSuperAdmin = email === 'maximtyrsa89@gmail.com';
+          const SUPER_ADMIN_EMAIL = process.env.NEXT_PUBLIC_SUPER_ADMIN_EMAIL;
+          const isSuperAdmin = email === SUPER_ADMIN_EMAIL;
 
           if (userDoc.exists()) {
             const userData = userDoc.data();
