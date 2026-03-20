@@ -1,11 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
 import { 
   collection, 
-  onSnapshot, 
   query, 
   orderBy, 
   writeBatch, 
@@ -17,17 +16,18 @@ import {
   startAfter,
   getDocs,
   where,
-  QueryDocumentSnapshot
+  QueryDocumentSnapshot,
+  DocumentData
 } from 'firebase/firestore';
-import { format, differenceInSeconds, isWithinInterval, startOfDay, endOfDay } from 'date-fns';
+import { format, isWithinInterval, startOfDay, endOfDay } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
 import { useRouter } from 'next/navigation';
 import { 
-  Filter, Search, CheckSquare, Square, X, ChevronDown, Package, 
-  Clock, User, Truck, Hash, Calendar, CheckCircle2, ArrowLeft, Trash2,
-  ChevronLeft, ChevronRight, Loader2
+  CheckSquare, Square, X, ChevronDown, Package, 
+  Clock, Hash, CheckCircle2, ArrowLeft, Trash2,
+  ChevronRight, Loader2, Search, XCircle
 } from 'lucide-react';
-import { useToast } from '@/components/Toast';
+import { showToast } from '@/components/Toast';
 
 const CARRIERS = ['Все', 'CDEK', 'DPD', 'Деловые линии', 'Почта России', 'ПЭК', 'Самовывоз', 'Образцы', 'OZON_FBS', 'Ярмарка Мастеров', 'Yandex Market', 'WB_FBS', 'AliExpress', 'Бийск', 'OZON_FBO', 'WB_FBO'];
 const STATUSES = ['Все', 'Новый', 'Комплектация', 'Ожидает оформления', 'Готов к выдаче', 'Оформлен', 'Завершен'];
@@ -37,23 +37,21 @@ const PAGE_SIZE = 20;
 export default function AdminOrdersPage() {
   const { user } = useAuth();
   const router = useRouter();
-  const { showToast } = useToast();
   
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-  const [lastDoc, setLastDoc] = useState<QueryDocumentSnapshot | null>(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [totalOrders, setTotalOrders] = useState(0);
+  const [lastDoc, setLastDoc] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [totalLoaded, setTotalLoaded] = useState(0);
   
   // States for loading indicators
   const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null);
   const [updatingStatusId, setUpdatingStatusId] = useState<string | null>(null);
   const [bulkUpdating, setBulkUpdating] = useState(false);
-  const [exporting, setExporting] = useState(false);
 
   // Filters
+  const [searchQuery, setSearchQuery] = useState('');
   const [dateRange, setDateRange] = useState<{ start: string; end: string }>({
     start: format(new Date(), 'yyyy-MM-dd'),
     end: format(new Date(), 'yyyy-MM-dd'),
@@ -67,22 +65,39 @@ export default function AdminOrdersPage() {
   // Modal
   const [selectedOrderDetails, setSelectedOrderDetails] = useState<any | null>(null);
   const [massStatusMenuOpen, setMassStatusMenuOpen] = useState(false);
+  
+  // Ref for initial load flag
+  const initialLoadDone = useRef(false);
 
   // Загрузка первой страницы
-  const loadFirstPage = async () => {
+  const loadFirstPage = useCallback(async () => {
     setLoading(true);
     setOrders([]);
     setLastDoc(null);
     setHasMore(true);
-    setCurrentPage(1);
+    setTotalLoaded(0);
 
     try {
+      let conditions = [];
+      
+      if (selectedCarrier !== 'Все') {
+        conditions.push(where('carrier', '==', selectedCarrier));
+      }
+      if (selectedStatus !== 'Все') {
+        conditions.push(where('status', '==', selectedStatus));
+      }
+      
       let q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE));
-      q = applyFilters(q);
+      
+      // Применяем where условия
+      for (const condition of conditions) {
+        q = query(q, condition);
+      }
       
       const snapshot = await getDocs(q);
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setOrders(data);
+      setTotalLoaded(data.length);
       
       if (snapshot.docs.length > 0) {
         setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
@@ -94,32 +109,44 @@ export default function AdminOrdersPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedCarrier, selectedStatus]);
 
   const loadMore = async () => {
-    if (!hasMore || loadingMore) return;
+    if (!hasMore || loadingMore || !lastDoc) return;
     
     setLoadingMore(true);
     
     try {
+      let conditions = [];
+      
+      if (selectedCarrier !== 'Все') {
+        conditions.push(where('carrier', '==', selectedCarrier));
+      }
+      if (selectedStatus !== 'Все') {
+        conditions.push(where('status', '==', selectedStatus));
+      }
+      
       let q = query(
         collection(db, 'orders'),
         orderBy('createdAt', 'desc'),
         startAfter(lastDoc),
         limit(PAGE_SIZE)
       );
-      q = applyFilters(q);
+      
+      for (const condition of conditions) {
+        q = query(q, condition);
+      }
       
       const snapshot = await getDocs(q);
       const newOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       
       setOrders(prev => [...prev, ...newOrders]);
+      setTotalLoaded(prev => prev + newOrders.length);
       
       if (snapshot.docs.length > 0) {
         setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
       }
       setHasMore(snapshot.docs.length === PAGE_SIZE);
-      setCurrentPage(prev => prev + 1);
     } catch (error) {
       console.error('Error loading more orders:', error);
       showToast('Ошибка при загрузке дополнительных заказов', 'error');
@@ -128,33 +155,39 @@ export default function AdminOrdersPage() {
     }
   };
 
-  const applyFilters = (baseQuery: any) => {
-    if (selectedCarrier !== 'Все') {
-      baseQuery = query(baseQuery, where('carrier', '==', selectedCarrier));
+  // Применение фильтров - перезагружаем данные
+  useEffect(() => {
+    if (initialLoadDone.current) {
+      loadFirstPage();
+    } else {
+      loadFirstPage();
+      initialLoadDone.current = true;
     }
-    if (selectedStatus !== 'Все') {
-      baseQuery = query(baseQuery, where('status', '==', selectedStatus));
-    }
-    return baseQuery;
-  };
+  }, [loadFirstPage, selectedCarrier, selectedStatus, dateRange]);
 
+  // Фильтрация на клиенте для дат и поиска
   const filteredOrders = useMemo(() => {
-    return orders.filter(order => {
+    let result = orders;
+    
+    // Фильтр по дате
+    result = result.filter(order => {
       const orderDate = order.createdAt?.seconds ? new Date(order.createdAt.seconds * 1000) : new Date(order.createdAt);
       if (isNaN(orderDate.getTime())) return false;
       const start = startOfDay(new Date(dateRange.start));
       const end = endOfDay(new Date(dateRange.end));
-      const inDateRange = isWithinInterval(orderDate, { start, end });
-      const carrierMatch = selectedCarrier === 'Все' || order.carrier === selectedCarrier;
-      const statusMatch = selectedStatus === 'Все' || order.status === selectedStatus;
-      return inDateRange && carrierMatch && statusMatch;
+      return isWithinInterval(orderDate, { start, end });
     });
-  }, [orders, dateRange, selectedCarrier, selectedStatus]);
-
-  // Применение фильтров при их изменении
-  useEffect(() => {
-    loadFirstPage();
-  }, [dateRange, selectedCarrier, selectedStatus]);
+    
+    // Фильтр по поисковому запросу (номер заказа)
+    if (searchQuery.trim()) {
+      const queryLower = searchQuery.trim().toLowerCase();
+      result = result.filter(order => 
+        order.orderNumber?.toLowerCase().includes(queryLower)
+      );
+    }
+    
+    return result;
+  }, [orders, dateRange, searchQuery]);
 
   const handleDeleteOrder = async (id: string) => {
     if (!window.confirm('Вы уверены, что хотите безвозвратно удалить этот заказ?')) return;
@@ -199,15 +232,12 @@ export default function AdminOrdersPage() {
       const batch = writeBatch(db);
       selectedOrders.forEach(id => {
         const orderRef = doc(db, 'orders', id);
-        const order = orders.find(o => o.id === id);
-        if (order) {
-          const updateData: any = {
-            status: newStatus,
-            lastUpdated: serverTimestamp()
-          };
-          if (newStatus === 'Завершен') updateData.shippedAt = serverTimestamp();
-          batch.update(orderRef, updateData);
-        }
+        const updateData: any = {
+          status: newStatus,
+          lastUpdated: serverTimestamp()
+        };
+        if (newStatus === 'Завершен') updateData.shippedAt = serverTimestamp();
+        batch.update(orderRef, updateData);
       });
       await batch.commit();
       
@@ -267,6 +297,10 @@ export default function AdminOrdersPage() {
     }
   };
 
+  const clearSearch = () => {
+    setSearchQuery('');
+  };
+
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="sticky top-0 z-30 bg-white border-b border-slate-200 px-4 py-3 shadow-sm">
@@ -281,7 +315,7 @@ export default function AdminOrdersPage() {
             <div>
               <h1 className="text-xl font-bold text-slate-900">Управление заказами</h1>
               <p className="text-xs text-slate-500 font-medium">
-                Показано: {filteredOrders.length} из {orders.length} заказов
+                Загружено: {totalLoaded} заказов • Отфильтровано: {filteredOrders.length}
                 {hasMore && <span className="ml-2 text-blue-500">(есть еще заказы)</span>}
               </p>
             </div>
@@ -293,31 +327,54 @@ export default function AdminOrdersPage() {
       </header>
 
       <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
-        {/* Filters */}
-        <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200 grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">От даты</label>
-            <input type="date" value={dateRange.start} onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
-              className="block w-full rounded-2xl border-slate-200 bg-slate-50 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+        {/* Поиск и фильтры */}
+        <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200 space-y-4">
+          {/* Поиск по номеру заказа */}
+          <div className="relative">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Поиск по номеру заказа..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-12 pr-10 py-3 rounded-2xl border border-slate-200 bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+            />
+            {searchQuery && (
+              <button
+                onClick={clearSearch}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            )}
           </div>
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">До даты</label>
-            <input type="date" value={dateRange.end} onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
-              className="block w-full rounded-2xl border-slate-200 bg-slate-50 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Компания</label>
-            <select value={selectedCarrier} onChange={(e) => setSelectedCarrier(e.target.value)}
-              className="block w-full rounded-2xl border-slate-200 bg-slate-50 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer">
-              {CARRIERS.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Статус</label>
-            <select value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)}
-              className="block w-full rounded-2xl border-slate-200 bg-slate-50 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer">
-              {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
+          
+          {/* Остальные фильтры */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">От даты</label>
+              <input type="date" value={dateRange.start} onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
+                className="block w-full rounded-2xl border-slate-200 bg-slate-50 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">До даты</label>
+              <input type="date" value={dateRange.end} onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
+                className="block w-full rounded-2xl border-slate-200 bg-slate-50 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Компания</label>
+              <select value={selectedCarrier} onChange={(e) => setSelectedCarrier(e.target.value)}
+                className="block w-full rounded-2xl border-slate-200 bg-slate-50 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer">
+                {CARRIERS.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Статус</label>
+              <select value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)}
+                className="block w-full rounded-2xl border-slate-200 bg-slate-50 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer">
+                {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
           </div>
         </div>
 
@@ -395,13 +452,16 @@ export default function AdminOrdersPage() {
                 ) : filteredOrders.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="p-20 text-center text-slate-400 font-medium">
-                      Заказы не найдены за этот период
+                      {searchQuery ? 'Заказы не найдены по запросу' : 'Заказы не найдены за этот период'}
                     </td>
                   </tr>
                 ) : (
                   filteredOrders.map(order => (
-                    <tr key={order.id} onClick={() => setSelectedOrderDetails(order)}
-                      className={`group hover:bg-blue-50/30 transition-all cursor-pointer ${selectedOrders.has(order.id) ? 'bg-blue-50' : ''}`}>
+                    <tr 
+                      key={order.id} 
+                      onClick={() => setSelectedOrderDetails(order)}
+                      className={`group hover:bg-blue-50/30 transition-all cursor-pointer ${selectedOrders.has(order.id) ? 'bg-blue-50' : ''}`}
+                    >
                       <td className="p-5" onClick={(e) => e.stopPropagation()}>
                         <button onClick={() => toggleOrderSelection(order.id)} className="transition-transform active:scale-90">
                           {selectedOrders.has(order.id) ? <CheckSquare className="w-6 h-6 text-blue-600" /> : <Square className="w-6 h-6 text-slate-200 group-hover:text-slate-300" />}
@@ -428,40 +488,31 @@ export default function AdminOrdersPage() {
           </div>
           
           {/* Pagination Controls */}
-          {!loading && filteredOrders.length > 0 && (
-            <div className="flex items-center justify-between px-6 py-4 border-t border-slate-200 bg-slate-50/30">
-              <div className="text-sm text-slate-500">
-                Показано <span className="font-medium text-slate-900">{filteredOrders.length}</span> из <span className="font-medium text-slate-900">{orders.length}</span> загруженных заказов
-                {hasMore && <span className="ml-2 text-blue-600 text-xs">(есть еще заказы в базе)</span>}
-              </div>
-              
-              <div className="flex items-center gap-3">
-                {hasMore && (
-                  <button
-                    onClick={loadMore}
-                    disabled={loadingMore}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {loadingMore ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Загрузка...
-                      </>
-                    ) : (
-                      <>
-                        <ChevronRight className="w-4 h-4" />
-                        Загрузить еще
-                      </>
-                    )}
-                  </button>
+          {!loading && filteredOrders.length > 0 && hasMore && (
+            <div className="flex items-center justify-center px-6 py-4 border-t border-slate-200 bg-slate-50/30">
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loadingMore ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Загрузка...
+                  </>
+                ) : (
+                  <>
+                    <ChevronRight className="w-4 h-4" />
+                    Загрузить еще заказы
+                  </>
                 )}
-              </div>
+              </button>
             </div>
           )}
         </div>
       </div>
 
-      {/* Side Modal (Drawer Style) */}
+      {/* Side Modal (Drawer Style) - без изменений */}
       <AnimatePresence>
         {selectedOrderDetails && (
           <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedOrderDetails(null)}>

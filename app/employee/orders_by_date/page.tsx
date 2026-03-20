@@ -1,165 +1,118 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import { doc, onSnapshot, updateDoc, serverTimestamp } from 'firebase/firestore';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { ArrowLeft, Package, ChevronRight, Loader2 } from 'lucide-react';
+import { collection, query, where, orderBy, getDocs, limit, startAfter, QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { useAuth } from '@/context/AuthContext';
-import { motion } from 'motion/react';
-import { 
-  ArrowLeft, 
-  Play, 
-  CheckCircle2, 
-  Clock, 
-  Package, 
-  Truck, 
-  Hash,
-  Loader2
-} from 'lucide-react';
+import { startOfDay, endOfDay, format } from 'date-fns';
+import { ru } from 'date-fns/locale';
 import Link from 'next/link';
-import { useToast } from '@/components/Toast';
+import { showToast } from '@/components/Toast';
 
-interface OrderData {
-  orderNumber?: string;
-  carrier: string;
-  quantity: number;
-  status: string;
-  time_start?: any;
-  time_end?: any;
-}
+const PAGE_SIZE = 20;
 
-export default function AssemblyPage() {
-  const { id } = useParams();
+export default function OrdersByDatePage() {
   const router = useRouter();
-  const { user } = useAuth();
-  const { showToast } = useToast();
   
-  const [order, setOrder] = useState<OrderData | null>(null);
+  const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [elapsedTime, setElapsedTime] = useState(0);
-  const [starting, setStarting] = useState(false);
-  const [finishing, setFinishing] = useState(false);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [lastDoc, setLastDoc] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [totalLoaded, setTotalLoaded] = useState(0);
+
+  const loadOrders = useCallback(async (loadMore = false) => {
+    if (loadMore) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+      setOrders([]);
+      setLastDoc(null);
+      setHasMore(true);
+      setTotalLoaded(0);
+    }
+
+    try {
+      // Получаем начало и конец сегодняшнего дня в ISO строке
+      const todayStart = startOfDay(new Date()).toISOString();
+      const todayEnd = endOfDay(new Date()).toISOString();
+      
+      console.log('Loading orders from:', todayStart, 'to:', todayEnd);
+      
+      let q = query(
+        collection(db, 'orders'),
+        where('createdAt', '>=', todayStart),
+        where('createdAt', '<=', todayEnd),
+        orderBy('createdAt', 'desc'),
+        limit(PAGE_SIZE)
+      );
+      
+      if (loadMore && lastDoc) {
+        q = query(q, startAfter(lastDoc));
+      }
+      
+      const snapshot = await getDocs(q);
+      console.log('Found orders:', snapshot.docs.length);
+      
+      const newOrders = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return { 
+          id: doc.id, 
+          ...data,
+          createdAtFormatted: data.createdAt ? format(new Date(data.createdAt), 'HH:mm') : '-'
+        };
+      });
+      
+      if (loadMore) {
+        setOrders(prev => [...prev, ...newOrders]);
+        setTotalLoaded(prev => prev + newOrders.length);
+      } else {
+        setOrders(newOrders);
+        setTotalLoaded(newOrders.length);
+      }
+      
+      if (snapshot.docs.length > 0) {
+        setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
+      }
+      setHasMore(snapshot.docs.length === PAGE_SIZE);
+    } catch (error) {
+      console.error('Error loading orders:', error);
+      showToast('Ошибка при загрузке заказов', 'error');
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [lastDoc]);
 
   useEffect(() => {
-    if (!id) return;
+    loadOrders();
+  }, []);
 
-    const docRef = doc(db, 'orders', id as string);
-    const unsubscribe = onSnapshot(docRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data() as OrderData;
-        setOrder(data);
-        
-        if (data.time_start && !data.time_end) {
-          const startTime = data.time_start.toDate().getTime();
-          const updateTimer = () => {
-            const now = Date.now();
-            setElapsedTime(Math.floor((now - startTime) / 1000));
-          };
-          
-          updateTimer();
-          if (timerRef.current) clearInterval(timerRef.current);
-          timerRef.current = setInterval(updateTimer, 1000);
-        } else if (data.time_start && data.time_end) {
-          const start = data.time_start.toDate().getTime();
-          const end = data.time_end.toDate().getTime();
-          setElapsedTime(Math.floor((end - start) / 1000));
-          if (timerRef.current) clearInterval(timerRef.current);
-        } else {
-          setElapsedTime(0);
-          if (timerRef.current) clearInterval(timerRef.current);
-        }
-      } else {
-        console.error('Order not found');
-      }
-      setLoading(false);
-    });
+  const loadMoreOrders = () => loadOrders(true);
 
-    return () => {
-      unsubscribe();
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [id]);
-
-  const handleStart = async () => {
-    if (!id || !user) return;
-    setStarting(true);
-    try {
-      const docRef = doc(db, 'orders', id as string);
-      await updateDoc(docRef, {
-        time_start: serverTimestamp(),
-        status: 'В работе'
-      });
-      showToast('Сборка начата', 'success');
-    } catch (err) {
-      console.error('Error starting assembly:', err);
-      showToast('Ошибка при начале сборки', 'error');
-    } finally {
-      setStarting(false);
+  const getStatusColor = (status: string) => {
+    if (!status) return 'bg-slate-100 text-slate-600';
+    switch (status) {
+      case 'Новый': return 'bg-purple-100 text-purple-800';
+      case 'Комплектация': return 'bg-blue-100 text-blue-800';
+      case 'В работе': return 'bg-blue-100 text-blue-800';
+      case 'Ожидает оформления': return 'bg-amber-100 text-amber-800';
+      case 'Готов к выдаче': return 'bg-emerald-100 text-emerald-800';
+      case 'Оформлен': return 'bg-emerald-100 text-emerald-800';
+      case 'Завершен': return 'bg-slate-200 text-slate-800';
+      default: return 'bg-slate-100 text-slate-600';
     }
   };
 
-  const handleFinish = async () => {
-    if (!id || !user || !order) return;
-    setFinishing(true);
-    try {
-      const docRef = doc(db, 'orders', id as string);
-      
-      if (order.carrier === 'Самовывоз') {
-        await updateDoc(docRef, {
-          time_end: serverTimestamp(),
-          status: 'Готов к выдаче'
-        });
-        showToast('Сборка завершена! Заказ готов к выдаче', 'success');
-        router.push('/employee/orders_by_date');
-      } else {
-        await updateDoc(docRef, {
-          time_end: serverTimestamp(),
-          status: 'Комплектация'
-        });
-        showToast('Сборка завершена! Переход к вводу габаритов', 'success');
-        router.push(`/employee/add_dimensions/${id}`);
-      }
-    } catch (err) {
-      console.error('Error finishing assembly:', err);
-      showToast('Ошибка при завершении сборки', 'error');
-    } finally {
-      setFinishing(false);
+  const getStatusText = (status: string) => {
+    if (!status) return '—';
+    switch (status) {
+      case 'Готов к выдаче': return 'Готов';
+      case 'Ожидает оформления': return 'Ожидает';
+      default: return status;
     }
   };
-
-  const formatTime = (seconds: number) => {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = seconds % 60;
-    return [
-      h > 0 ? h.toString().padStart(2, '0') : null,
-      m.toString().padStart(2, '0'),
-      s.toString().padStart(2, '0')
-    ].filter(Boolean).join(':');
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
-      </div>
-    );
-  }
-
-  if (!order) {
-    return (
-      <div className="min-h-screen p-4 bg-slate-50">
-        <div className="bg-white p-8 rounded-2xl text-center border border-slate-200">
-          <p className="text-slate-600">Заказ не найден</p>
-          <Link href="/" className="mt-4 text-blue-600 inline-block">Вернуться на главную</Link>
-        </div>
-      </div>
-    );
-  }
-
-  const isStarted = !!order.time_start;
-  const isFinished = !!order.time_end;
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20">
@@ -167,97 +120,85 @@ export default function AssemblyPage() {
         <button onClick={() => router.back()} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
           <ArrowLeft className="w-6 h-6 text-slate-600" />
         </button>
-        <h1 className="text-xl font-bold text-slate-900">Сборка заказа</h1>
+        <div>
+          <h1 className="text-xl font-bold text-slate-900">Заказы за сегодня</h1>
+          <p className="text-sm text-slate-500">
+            {format(new Date(), 'd MMMM yyyy', { locale: ru })}
+            {totalLoaded > 0 && <span className="ml-2 text-blue-500">• {totalLoaded} заказов</span>}
+          </p>
+        </div>
       </header>
 
-      <main className="max-w-lg mx-auto p-4 space-y-6">
-        <motion.div 
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 space-y-4"
-        >
-          <div className="flex justify-between items-start">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2 text-slate-500 text-sm">
-                <Hash className="w-4 h-4" />
-                <span>Номер заказа</span>
-              </div>
-              <p className="text-xl font-bold text-slate-900">{order.orderNumber || 'Без номера'}</p>
-            </div>
-            <div className={`px-3 py-1 rounded-full text-xs font-bold ${
-              order.status === 'Собрано' ? 'bg-emerald-100 text-emerald-700' :
-              order.status === 'В работе' ? 'bg-blue-100 text-blue-700' :
-              'bg-slate-100 text-slate-600'
-            }`}>
-              {order.status}
-            </div>
+      <main className="max-w-lg mx-auto p-4">
+        {loading ? (
+          <div className="p-8 text-center">
+            <Loader2 className="w-8 h-8 animate-spin text-blue-600 mx-auto" />
+            <p className="text-slate-400 mt-2">Загрузка заказов...</p>
           </div>
-
-          <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-100">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2 text-slate-500 text-sm">
-                <Truck className="w-4 h-4" />
-                <span>ТК</span>
-              </div>
-              <p className="font-semibold text-slate-900">{order.carrier}</p>
-            </div>
-            <div className="space-y-1">
-              <div className="flex items-center gap-2 text-slate-500 text-sm">
-                <Package className="w-4 h-4" />
-                <span>Мест</span>
-              </div>
-              <p className="font-semibold text-slate-900">{order.quantity}</p>
-            </div>
-          </div>
-        </motion.div>
-
-        <div className="flex flex-col items-center justify-center py-12 space-y-4">
-          <div className="flex items-center gap-2 text-slate-400">
-            <Clock className="w-5 h-5" />
-            <span className="text-sm font-medium uppercase tracking-wider">Время сборки</span>
-          </div>
-          <div className="text-6xl font-mono font-bold text-slate-900 tabular-nums">
-            {formatTime(elapsedTime)}
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          {!isStarted ? (
-            <button
-              onClick={handleStart}
-              disabled={starting}
-              className="w-full h-20 bg-blue-600 hover:bg-blue-700 text-white rounded-3xl font-bold text-xl shadow-lg shadow-blue-200 transition-all active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+        ) : orders.length === 0 ? (
+          <div className="p-8 text-center bg-white rounded-2xl border border-slate-200">
+            <Package className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+            <p className="text-slate-400">Заказов за сегодня пока нет</p>
+            <Link 
+              href="/employee/add_order"
+              className="inline-block mt-4 px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 transition-colors"
             >
-              {starting ? (
-                <Loader2 className="w-6 h-6 animate-spin" />
-              ) : (
-                <Play className="w-6 h-6 fill-current" />
-              )}
-              {starting ? 'Запуск...' : 'Начать сборку'}
-            </button>
-          ) : !isFinished ? (
-            <button
-              onClick={handleFinish}
-              disabled={finishing}
-              className="w-full h-20 bg-emerald-600 hover:bg-emerald-700 text-white rounded-3xl font-bold text-xl shadow-lg shadow-emerald-200 transition-all active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {finishing ? (
-                <Loader2 className="w-6 h-6 animate-spin" />
-              ) : (
-                <CheckCircle2 className="w-6 h-6" />
-              )}
-              {finishing ? 'Завершение...' : 'Завершить сборку'}
-            </button>
-          ) : (
-            <button
-              disabled
-              className="w-full h-20 bg-slate-200 text-slate-500 rounded-3xl font-bold text-xl flex items-center justify-center gap-3 cursor-not-allowed"
-            >
-              <CheckCircle2 className="w-6 h-6" />
-              Сборка завершена
-            </button>
-          )}
-        </div>
+              Создать заказ
+            </Link>
+          </div>
+        ) : (
+          <>
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden divide-y divide-slate-100">
+              {orders.map((order) => (
+                <Link
+                  key={order.id}
+                  href={`/employee/order_details/${order.id}`}
+                  className="flex items-center justify-between p-4 hover:bg-slate-50 transition-colors group"
+                >
+                  <div className="flex items-center gap-4 flex-1">
+                    <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-500 shrink-0">
+                      <Package className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-bold text-slate-900 truncate">
+                          {order.orderNumber || 'Без номера'}
+                        </p>
+                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider shrink-0 ${getStatusColor(order.status)}`}>
+                          {getStatusText(order.status)}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {order.carrier || '—'} • {order.quantity || 0} мест
+                        {order.createdAtFormatted && ` • ${order.createdAtFormatted}`}
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-slate-400 transition-colors shrink-0 ml-2" />
+                </Link>
+              ))}
+            </div>
+            
+            {hasMore && orders.length >= PAGE_SIZE && (
+              <div className="mt-6 text-center">
+                <button
+                  onClick={loadMoreOrders}
+                  disabled={loadingMore}
+                  className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-all disabled:opacity-50 flex items-center justify-center gap-2 mx-auto"
+                >
+                  {loadingMore ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Загрузка...
+                    </>
+                  ) : (
+                    'Загрузить еще заказы'
+                  )}
+                </button>
+              </div>
+            )}
+          </>
+        )}
       </main>
     </div>
   );
