@@ -71,7 +71,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Array<{ id: number; message: string; type: ToastType }>>([]);
 
   const showToast = (message: string, type: ToastType) => {
-    console.log('Toast shown:', message, type); // Для отладки
+    console.log('[Toast]', type, message);
     const id = Date.now();
     setToasts(prev => [...prev, { id, message, type }]);
   };
@@ -102,14 +102,30 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 export function useToast() {
   const context = useContext(ToastContext);
   if (!context) {
-    console.warn('useToast called outside of ToastProvider - returning fallback');
-    // Возвращаем fallback вместо ошибки, чтобы приложение не падало
+    console.warn('useToast called outside ToastProvider');
+    // Возвращаем fallback функцию
     return {
       showToast: (message: string, type: ToastType) => {
         console.log(`[Toast Fallback] ${type}: ${message}`);
-        alert(message); // Временное решение
+        alert(message);
       }
     };
   }
   return context;
+}
+
+// Экспортируем showToast как отдельную функцию для использования без хука
+let globalShowToastFn: ((message: string, type: ToastType) => void) | null = null;
+
+export function setGlobalToast(fn: (message: string, type: ToastType) => void) {
+  globalShowToastFn = fn;
+}
+
+export function showToast(message: string, type: ToastType) {
+  if (globalShowToastFn) {
+    globalShowToastFn(message, type);
+  } else {
+    console.log(`[Toast] ${type}: ${message}`);
+    alert(message);
+  }
 }

@@ -1,13 +1,22 @@
+'use client';
+
 import type { Metadata } from 'next';
 import './globals.css';
 import { AuthProvider } from '@/context/AuthContext';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { ToastProvider } from '@/components/Toast';
+import { ToastProvider, setGlobalToast, useToast } from '@/components/Toast';
+import { useEffect } from 'react';
 
-export const metadata: Metadata = {
-  title: 'WMS Pro',
-  description: 'Warehouse Management System',
-};
+// Компонент для регистрации глобального тоста
+function ToastRegistrar() {
+  const { showToast } = useToast();
+  
+  useEffect(() => {
+    setGlobalToast(showToast);
+  }, [showToast]);
+  
+  return null;
+}
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -15,6 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body suppressHydrationWarning>
         <ErrorBoundary>
           <ToastProvider>
+            <ToastRegistrar />
             <AuthProvider>
               {children}
             </AuthProvider>
