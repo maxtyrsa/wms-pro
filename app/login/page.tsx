@@ -37,8 +37,8 @@ export default function LoginPage() {
           <div className="w-16 h-16 bg-blue-600 rounded-xl flex items-center justify-center mb-4 shadow-lg shadow-blue-200">
             <LogIn className="text-white w-8 h-8" />
           </div>
-          <h1 className="text-2xl font-bold text-slate-900">WMS Pro</h1>
-          <p className="text-slate-500 text-sm mt-1">Система управления складом</p>
+          <h1 className="text-2xl font-bold text-slate-900">WMS Kupi-Flakon</h1>
+          <p className="text-slate-500 text-sm mt-1">Система управления Московским складом</p>
         </div>
 
         {error && (
