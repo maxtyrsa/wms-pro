@@ -6,8 +6,11 @@ import { ToastProvider } from '@/components/Toast';
 import { ThemeProvider } from '@/context/ThemeContext';
 
 export const metadata: Metadata = {
-  title: 'WMS Pro',
-  description: 'Warehouse Management System',
+  title: 'WMS Kupi-Flakon',
+  description: 'Warehouse Management System for Kupi-Flakon',
+  icons: {
+    icon: '/favicon.ico',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
