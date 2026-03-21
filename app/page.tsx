@@ -100,7 +100,7 @@ export default function DashboardPage() {
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shrink-0">
               <Package className="text-white w-5 h-5" />
             </div>
-            <span className="font-bold text-slate-900 dark:text-white text-lg">WMS Pro</span>
+            <span className="font-bold text-slate-900 dark:text-white text-lg">WMS Kupi-Flakon</span>
           </div>
           
           {/* Desktop navigation */}
@@ -153,7 +153,7 @@ export default function DashboardPage() {
         <header className="mb-6 sm:mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">Панель управления</h1>
-            <p className="text-sm text-slate-500 dark:text-slate-400">Добро пожаловать в систему управления складом.</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Добро пожаловать в систему управления Московским складом.</p>
           </div>
           <Link 
             href="/employee/add_order"
@@ -180,9 +180,9 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Navigation Cards */}
+        {/* Navigation Cards - Mobile friendly with full text */}
         {role === 'admin' && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3 mb-6 sm:mb-8">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-6 sm:mb-8">
             <NavCard 
               href="/admin/dashboard"
               icon={<LayoutDashboard />}
@@ -192,7 +192,7 @@ export default function DashboardPage() {
             <NavCard 
               href="/admin/orders"
               icon={<ClipboardList />}
-              title="Заказы"
+              title="Управление заказами"
               color="indigo"
             />
             <NavCard 
@@ -210,7 +210,7 @@ export default function DashboardPage() {
             <NavCard 
               href="/admin/reports"
               icon={<FileSpreadsheet />}
-              title="Отчеты"
+              title="Отчеты Excel"
               color="emerald"
             />
             <NavCard 
@@ -342,7 +342,7 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode, label:
       <div className={`w-8 h-8 sm:w-12 sm:h-12 ${colorMap[color]} rounded-xl flex items-center justify-center mb-2 sm:mb-4`}>
         {React.isValidElement(icon) ? React.cloneElement(icon as React.ReactElement<any>, { className: 'w-4 h-4 sm:w-6 sm:h-6' }) : icon}
       </div>
-      <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 font-medium truncate">{label}</p>
+      <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 font-medium">{label}</p>
       <p className="text-xl sm:text-3xl font-bold text-slate-900 dark:text-white mt-1">{value}</p>
     </motion.div>
   );
@@ -363,13 +363,15 @@ function NavCard({ href, icon, title, color }: { href: string; icon: React.React
   return (
     <Link 
       href={href}
-      className="bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-2 sm:gap-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all group"
+      className="bg-white dark:bg-slate-900 p-3 sm:p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-all group"
     >
-      <div className={`w-8 h-8 sm:w-10 sm:h-10 ${colorMap[color]} rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform shrink-0`}>
-        {React.isValidElement(icon) ? React.cloneElement(icon as React.ReactElement<any>, { className: 'w-4 h-4 sm:w-5 sm:h-5' }) : icon}
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="font-bold text-slate-900 dark:text-white text-sm sm:text-base truncate">{title}</p>
+      <div className="flex flex-col items-center text-center gap-2">
+        <div className={`w-10 h-10 sm:w-12 sm:h-12 ${colorMap[color]} rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform`}>
+          {React.isValidElement(icon) ? React.cloneElement(icon as React.ReactElement<any>, { className: 'w-5 h-5 sm:w-6 sm:h-6' }) : icon}
+        </div>
+        <p className="font-bold text-slate-900 dark:text-white text-xs sm:text-sm break-words text-center max-w-[80px] sm:max-w-none">
+          {title}
+        </p>
       </div>
     </Link>
   );
