@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Package, Truck, Calendar, User, CheckCircle2, Clock, Eye, X, Loader2 } from 'lucide-react';
+import { ArrowLeft, Package, Truck, Eye, X, Loader2, Layers, Shield } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
@@ -115,12 +115,16 @@ export default function ConsolidationsPage() {
           </button>
           <div>
             <h1 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <Package className="w-5 h-5 text-blue-600" />
+              <Layers className="w-5 h-5 text-blue-600" />
               Консоли отправки
             </h1>
             <p className="text-sm text-slate-500 dark:text-slate-400">
               Управление партиями отправленных заказов
             </p>
+          </div>
+          <div className="ml-4 bg-blue-50 dark:bg-blue-900/30 px-3 py-1 rounded-lg text-xs font-semibold text-blue-600 dark:text-blue-400 flex items-center gap-1">
+            <Shield className="w-3 h-3" />
+            Администратор
           </div>
         </div>
         <ThemeToggle />
@@ -131,6 +135,12 @@ export default function ConsolidationsPage() {
           <div className="text-center py-12 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800">
             <Package className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
             <p className="text-slate-400 dark:text-slate-500">Нет созданных консолей</p>
+            <button
+              onClick={() => router.push('/admin/shipments')}
+              className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors"
+            >
+              Создать консоль
+            </button>
           </div>
         ) : (
           <div className="space-y-4">
