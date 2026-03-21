@@ -111,3 +111,19 @@ export function useToast() {
   }
   return context;
 }
+
+// Экспортируем showToast как отдельную функцию для использования без хука
+let globalShowToastFn: ((message: string, type: ToastType) => void) | null = null;
+
+export function setGlobalToast(fn: (message: string, type: ToastType) => void) {
+  globalShowToastFn = fn;
+}
+
+export function showToast(message: string, type: ToastType) {
+  if (globalShowToastFn) {
+    globalShowToastFn(message, type);
+  } else {
+    console.log(`[Toast] ${type}: ${message}`);
+    // Не показываем alert, чтобы не раздражать пользователя
+  }
+}

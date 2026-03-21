@@ -1,264 +1,409 @@
 'use client';
 
-import React, { useState } from 'react';
-import { X, Loader2, Calendar, User, Package, Truck, Layers } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, addDoc, doc, writeBatch } from 'firebase/firestore';
+import { collection, query, where, getDocs, updateDoc, doc, orderBy, writeBatch } from 'firebase/firestore';
+import { format, startOfDay, endOfDay } from 'date-fns';
+import { ru } from 'date-fns/locale';
+import { 
+  Package, Search, XCircle, Truck, 
+  CheckCircle2, Loader2, BarChart3,
+  TrendingUp, Layers
+} from 'lucide-react';
 import { showToast } from '@/components/Toast';
-import { format } from 'date-fns';
+import { CreateConsolidationModal } from '@/components/consolidation/CreateConsolidationModal';
 
-interface ConsolidationOrder {
+interface ShippedOrder {
   id: string;
-  orderNumber: string;
+  orderNumber?: string;
   carrier: string;
-  quantity: number;
+  status: string;
+  createdAt: string;
+  createdBy: string;
+  totalWeight?: number;
+  totalVolume?: number;
+  profit?: number;
+  quantity?: number;
+}
+
+interface ShipmentStats {
+  totalOrders: number;
   totalWeight: number;
   totalVolume: number;
-  createdBy: string;
-  payment_sum: number;
-  profit: number;
+  totalProfit: number;
+  carriers: Record<string, number>;
 }
 
-interface CreateConsolidationModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  selectedOrders: ConsolidationOrder[];
-  onSuccess: () => void;
-}
-
-export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSuccess }: CreateConsolidationModalProps) {
-  const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState({
-    plannedShipmentDate: format(new Date(), 'yyyy-MM-dd'),
-    responsiblePerson: '',
-    notes: ''
+export function ShippedOrdersList() {
+  const [orders, setOrders] = useState<ShippedOrder[]>([]);
+  const [filteredOrders, setFilteredOrders] = useState<ShippedOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCarrier, setSelectedCarrier] = useState<string>('all');
+  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [dateRange, setDateRange] = useState<{ start: string; end: string }>({
+    start: format(startOfDay(new Date()), 'yyyy-MM-dd'),
+    end: format(endOfDay(new Date()), 'yyyy-MM-dd'),
+  });
+  const [stats, setStats] = useState<ShipmentStats>({
+    totalOrders: 0,
+    totalWeight: 0,
+    totalVolume: 0,
+    totalProfit: 0,
+    carriers: {}
   });
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    fetchShippedOrders();
+  }, []);
 
-  const carriers = [...new Set(selectedOrders.map(o => o.carrier))];
-  const mainCarrier = carriers.length === 1 ? carriers[0] : 'mixed';
-  
-  const totalOrders = selectedOrders.length;
-  const totalWeight = selectedOrders.reduce((sum, o) => sum + (o.totalWeight || 0), 0);
-  const totalVolume = selectedOrders.reduce((sum, o) => sum + (o.totalVolume || 0), 0);
-  const totalProfit = selectedOrders.reduce((sum, o) => sum + (o.profit || 0), 0);
+  useEffect(() => {
+    applyFilters();
+  }, [orders, searchQuery, selectedCarrier, dateRange]);
 
-  const generateConsolidationNumber = () => {
-    const date = new Date();
-    const dateStr = format(date, 'yyyy-MM-dd');
-    const random = Math.floor(Math.random() * 100).toString().padStart(2, '0');
-    return `CON-${dateStr}-${random}`;
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!formData.responsiblePerson.trim()) {
-      showToast('Укажите ответственного сотрудника', 'error');
-      return;
-    }
-
+  const fetchShippedOrders = async () => {
     setLoading(true);
-
     try {
-      const consolidationNumber = generateConsolidationNumber();
-      const now = new Date().toISOString();
-
-      const consolidationData = {
-        consolidationNumber,
-        carrier: mainCarrier,
-        createdAt: now,
-        createdBy: formData.responsiblePerson,
-        orders: selectedOrders.map(o => ({
-          id: o.id,
-          orderNumber: o.orderNumber,
-          quantity: o.quantity,
-          totalWeight: o.totalWeight,
-          totalVolume: o.totalVolume,
-          createdBy: o.createdBy,
-          payment_sum: o.payment_sum,
-          profit: o.profit
-        })),
-        totalOrders,
-        totalWeight,
-        totalVolume,
-        totalProfit,
-        plannedShipmentDate: formData.plannedShipmentDate,
-        status: 'pending',
-        responsiblePerson: formData.responsiblePerson,
-        notes: formData.notes
-      };
-
-      const docRef = await addDoc(collection(db, 'consolidations'), consolidationData);
-
-      const batch = writeBatch(db);
-      selectedOrders.forEach(order => {
-        const orderRef = doc(db, 'orders', order.id);
-        batch.update(orderRef, {
-          status: 'В консолидации',
-          consolidationId: docRef.id
-        });
-      });
-      await batch.commit();
-
-      showToast(`Консоль ${consolidationNumber} успешно создана`, 'success');
-      onSuccess();
-      onClose();
+      const q = query(
+        collection(db, 'orders'),
+        where('status', '==', 'Оформлен'),
+        where('carrier', '!=', 'Самовывоз'),
+        orderBy('createdAt', 'desc')
+      );
+      const snapshot = await getDocs(q);
+      const data = snapshot.docs.map(doc => ({ 
+        id: doc.id, 
+        ...doc.data(),
+        quantity: doc.data().quantity || 1
+      } as ShippedOrder));
+      setOrders(data);
+      calculateStats(data);
     } catch (error) {
-      console.error('Error creating consolidation:', error);
-      showToast('Ошибка при создании консоли', 'error');
+      console.error('Error fetching shipped orders:', error);
+      showToast('Ошибка при загрузке заказов', 'error');
     } finally {
       setLoading(false);
     }
   };
 
+  const calculateStats = (ordersData: ShippedOrder[]) => {
+    const carriers: Record<string, number> = {};
+    let totalWeight = 0;
+    let totalVolume = 0;
+    let totalProfit = 0;
+
+    ordersData.forEach(order => {
+      carriers[order.carrier] = (carriers[order.carrier] || 0) + 1;
+      totalWeight += order.totalWeight || 0;
+      totalVolume += order.totalVolume || 0;
+      totalProfit += order.profit || 0;
+    });
+
+    setStats({
+      totalOrders: ordersData.length,
+      totalWeight,
+      totalVolume,
+      totalProfit,
+      carriers
+    });
+  };
+
+  const applyFilters = () => {
+    let filtered = [...orders];
+
+    if (searchQuery.trim()) {
+      const queryLower = searchQuery.trim().toLowerCase();
+      filtered = filtered.filter(order => 
+        order.orderNumber?.toLowerCase().includes(queryLower)
+      );
+    }
+
+    if (selectedCarrier !== 'all') {
+      filtered = filtered.filter(order => order.carrier === selectedCarrier);
+    }
+
+    if (dateRange.start && dateRange.end) {
+      const start = startOfDay(new Date(dateRange.start));
+      const end = endOfDay(new Date(dateRange.end));
+      filtered = filtered.filter(order => {
+        const orderDate = new Date(order.createdAt);
+        return orderDate >= start && orderDate <= end;
+      });
+    }
+
+    setFilteredOrders(filtered);
+  };
+
+  const toggleOrderSelection = (orderId: string) => {
+    const newSelection = new Set(selectedOrders);
+    if (newSelection.has(orderId)) {
+      newSelection.delete(orderId);
+    } else {
+      newSelection.add(orderId);
+    }
+    setSelectedOrders(newSelection);
+  };
+
+  const toggleAllSelection = () => {
+    if (selectedOrders.size === filteredOrders.length) {
+      setSelectedOrders(new Set());
+    } else {
+      setSelectedOrders(new Set(filteredOrders.map(o => o.id)));
+    }
+  };
+
+  const getSelectedOrdersData = () => {
+    return filteredOrders
+      .filter(o => selectedOrders.has(o.id))
+      .map(o => ({
+        id: o.id,
+        orderNumber: o.orderNumber || 'Без номера',
+        carrier: o.carrier,
+        quantity: o.quantity || 1,
+        totalWeight: o.totalWeight || 0,
+        totalVolume: o.totalVolume || 0,
+        createdBy: o.createdBy,
+        payment_sum: o.payment_sum || 0,
+        profit: o.profit || 0
+      }));
+  };
+
+  const clearSearch = () => setSearchQuery('');
+
+  const carriers = ['all', ...Object.keys(stats.carriers)];
+
+  const getCarrierColor = (carrier: string) => {
+    const colors: Record<string, string> = {
+      'CDEK': 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
+      'DPD': 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300',
+      'Деловые линии': 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
+      'Почта России': 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
+      'ПЭК': 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300',
+    };
+    return colors[carrier] || 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300';
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
+  const selectedCount = selectedOrders.size;
+
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
-          />
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            className="relative w-full max-w-2xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl overflow-hidden"
-          >
-            <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                  <Layers className="w-6 h-6 text-blue-600" />
-                  Создание консоли
-                </h2>
-                <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                  Выбрано {selectedOrders.length} заказов
-                </p>
-              </div>
-              <button
-                onClick={onClose}
-                className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"
-              >
-                <X className="w-5 h-5 text-slate-400" />
+    <div className="space-y-6">
+      {/* Статистика */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatsCard 
+          title="Готовы к отправке" 
+          value={stats.totalOrders.toString()} 
+          icon={<Package className="w-5 h-5" />}
+          color="blue"
+        />
+        <StatsCard 
+          title="Общий вес" 
+          value={`${stats.totalWeight.toFixed(1)} кг`} 
+          icon={<TrendingUp className="w-5 h-5" />}
+          color="emerald"
+        />
+        <StatsCard 
+          title="Общий объем" 
+          value={`${stats.totalVolume.toFixed(4)} м³`} 
+          icon={<BarChart3 className="w-5 h-5" />}
+          color="purple"
+        />
+        <StatsCard 
+          title="Общая прибыль" 
+          value={`${stats.totalProfit.toLocaleString()} ₽`} 
+          icon={<CheckCircle2 className="w-5 h-5" />}
+          color="orange"
+        />
+      </div>
+
+      {/* Фильтры */}
+      <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="relative">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Поиск по номеру заказа..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-12 pr-10 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
+            />
+            {searchQuery && (
+              <button onClick={clearSearch} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                <XCircle className="w-5 h-5" />
               </button>
-            </div>
+            )}
+          </div>
 
-            <form onSubmit={handleSubmit} className="p-6 space-y-6">
-              <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl space-y-3">
-                <h3 className="font-semibold text-slate-900 dark:text-white">Параметры партии</h3>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <p className="text-slate-500 dark:text-slate-400">Транспортная компания</p>
-                    <p className="font-semibold text-slate-900 dark:text-white">{mainCarrier === 'mixed' ? 'Разные ТК' : mainCarrier}</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500 dark:text-slate-400">Количество заказов</p>
-                    <p className="font-semibold text-slate-900 dark:text-white">{totalOrders}</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500 dark:text-slate-400">Общий вес</p>
-                    <p className="font-semibold text-slate-900 dark:text-white">{totalWeight.toFixed(1)} кг</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500 dark:text-slate-400">Общий объем</p>
-                    <p className="font-semibold text-slate-900 dark:text-white">{totalVolume.toFixed(4)} м³</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500 dark:text-slate-400">Общая прибыль</p>
-                    <p className="font-semibold text-emerald-600 dark:text-emerald-400">{totalProfit.toLocaleString()} ₽</p>
-                  </div>
-                </div>
-              </div>
+          <select
+            value={selectedCarrier}
+            onChange={(e) => setSelectedCarrier(e.target.value)}
+            className="px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
+          >
+            <option value="all">Все ТК</option>
+            {carriers.filter(c => c !== 'all').map(carrier => (
+              <option key={carrier} value={carrier}>{carrier}</option>
+            ))}
+          </select>
 
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    <User className="w-4 h-4 inline mr-1" />
-                    Ответственный сотрудник *
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.responsiblePerson}
-                    onChange={(e) => setFormData({ ...formData, responsiblePerson: e.target.value })}
-                    placeholder="Фамилия И.О."
-                    className="w-full px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
-                    required
-                  />
-                </div>
+          <div className="flex gap-2">
+            <input
+              type="date"
+              value={dateRange.start}
+              onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
+              className="flex-1 px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
+            />
+            <span className="self-center text-slate-400">—</span>
+            <input
+              type="date"
+              value={dateRange.end}
+              onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
+              className="flex-1 px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
+            />
+          </div>
+        </div>
+      </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    <Calendar className="w-4 h-4 inline mr-1" />
-                    Планируемая дата отправки *
-                  </label>
-                  <input
-                    type="date"
-                    value={formData.plannedShipmentDate}
-                    onChange={(e) => setFormData({ ...formData, plannedShipmentDate: e.target.value })}
-                    className="w-full px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Примечания
-                  </label>
-                  <textarea
-                    value={formData.notes}
-                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                    placeholder="Дополнительная информация..."
-                    rows={3}
-                    className="w-full px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
-                  />
-                </div>
-              </div>
-
-              <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
-                <h3 className="font-semibold text-slate-900 dark:text-white mb-3">Входящие заказы</h3>
-                <div className="max-h-48 overflow-y-auto space-y-2">
-                  {selectedOrders.map(order => (
-                    <div key={order.id} className="flex items-center justify-between text-sm p-2 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                      <span className="font-medium text-slate-900 dark:text-white">{order.orderNumber}</span>
-                      <span className="text-slate-500 dark:text-slate-400">{order.quantity} мест</span>
-                      <span className="text-slate-500 dark:text-slate-400">{order.totalWeight} кг</span>
-                      <span className="text-emerald-600 dark:text-emerald-400">{order.profit.toLocaleString()} ₽</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex gap-3 pt-4">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="flex-1 px-4 py-3 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-700 dark:text-slate-300 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
-                >
-                  Отмена
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {loading ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                  ) : (
-                    <Truck className="w-5 h-5" />
-                  )}
-                  Создать консоль
-                </button>
-              </div>
-            </form>
-          </motion.div>
+      {/* Панель выбора и создания консоли */}
+      {filteredOrders.length > 0 && (
+        <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 flex items-center justify-between flex-wrap gap-4">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={toggleAllSelection}
+              className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+            >
+              <input
+                type="checkbox"
+                checked={selectedOrders.size === filteredOrders.length && filteredOrders.length > 0}
+                onChange={() => {}}
+                className="w-4 h-4 rounded border-slate-300"
+              />
+              {selectedOrders.size === filteredOrders.length ? 'Снять все' : 'Выбрать все'}
+            </button>
+            <span className="text-sm text-slate-500 dark:text-slate-400">
+              Выбрано: <b className="text-slate-900 dark:text-white">{selectedCount}</b> заказов
+            </span>
+          </div>
+          
+          {selectedCount > 0 && (
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors flex items-center gap-2"
+            >
+              <Layers className="w-4 h-4" />
+              Создать консоль ({selectedCount})
+            </button>
+          )}
         </div>
       )}
-    </AnimatePresence>
+
+      {/* Список заказов с чекбоксами */}
+      {filteredOrders.length === 0 ? (
+        <div className="text-center py-12 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800">
+          <Package className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
+          <p className="text-slate-400 dark:text-slate-500">
+            {orders.length === 0 ? 'Нет заказов, готовых к отправке' : 'Заказы не найдены по выбранным фильтрам'}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {filteredOrders.map(order => (
+            <div
+              key={order.id}
+              className={`p-4 rounded-2xl border shadow-sm transition-all cursor-pointer hover:shadow-md ${
+                selectedOrders.has(order.id)
+                  ? 'bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
+              }`}
+              onClick={() => toggleOrderSelection(order.id)}
+            >
+              <div className="flex items-start justify-between flex-wrap gap-4">
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={selectedOrders.has(order.id)}
+                    onChange={() => {}}
+                    onClick={(e) => e.stopPropagation()}
+                    className="mt-1 w-4 h-4 rounded border-slate-300"
+                  />
+                  <div className="flex-1 min-w-[200px]">
+                    <div className="flex items-center gap-3 mb-3 flex-wrap">
+                      <h3 className="font-bold text-lg text-slate-900 dark:text-white">
+                        Заказ №{order.orderNumber || 'Без номера'}
+                      </h3>
+                      <span className={`px-2 py-1 rounded-lg text-[10px] font-bold ${getCarrierColor(order.carrier)}`}>
+                        {order.carrier}
+                      </span>
+                      <span className="px-2 py-1 rounded-lg text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+                        Оформлен
+                      </span>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                      <div>
+                        <p className="text-slate-500 dark:text-slate-400 text-xs">Сборщик</p>
+                        <p className="font-medium text-slate-700 dark:text-slate-300">{order.createdBy?.split('@')[0] || '—'}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500 dark:text-slate-400 text-xs">Мест</p>
+                        <p className="font-medium text-slate-700 dark:text-slate-300">{order.quantity || 1}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500 dark:text-slate-400 text-xs">Вес</p>
+                        <p className="font-medium text-slate-700 dark:text-slate-300">{order.totalWeight?.toFixed(1) || 0} кг</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500 dark:text-slate-400 text-xs">Прибыль</p>
+                        <p className="font-bold text-emerald-600 dark:text-emerald-400">
+                          {order.profit ? `${order.profit.toLocaleString()} ₽` : '—'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Модальное окно создания консоли */}
+      <CreateConsolidationModal
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        selectedOrders={getSelectedOrdersData()}
+        onSuccess={() => {
+          fetchShippedOrders();
+          setSelectedOrders(new Set());
+        }}
+      />
+    </div>
+  );
+}
+
+function StatsCard({ title, value, icon, color }: { title: string; value: string; icon: React.ReactNode; color: string }) {
+  const colors: any = {
+    blue: 'bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400',
+    emerald: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400',
+    purple: 'bg-purple-50 text-purple-600 dark:bg-purple-900/20 dark:text-purple-400',
+    orange: 'bg-orange-50 text-orange-600 dark:bg-orange-900/20 dark:text-orange-400',
+  };
+
+  return (
+    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800">
+      <div className={`w-12 h-12 ${colors[color]} rounded-xl flex items-center justify-center mb-4`}>
+        {icon}
+      </div>
+      <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">{title}</p>
+      <p className="text-2xl font-black text-slate-900 dark:text-white mt-1">{value}</p>
+    </div>
   );
 }
