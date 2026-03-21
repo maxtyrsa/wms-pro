@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, updateDoc, doc, orderBy, writeBatch } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { 
@@ -24,6 +24,7 @@ interface ShippedOrder {
   totalVolume?: number;
   profit?: number;
   quantity?: number;
+  payment_sum?: number;
 }
 
 interface ShipmentStats {
@@ -75,7 +76,9 @@ export function ShippedOrdersList() {
       const data = snapshot.docs.map(doc => ({ 
         id: doc.id, 
         ...doc.data(),
-        quantity: doc.data().quantity || 1
+        quantity: doc.data().quantity || 1,
+        payment_sum: doc.data().payment_sum || 0,
+        profit: doc.data().profit || 0
       } as ShippedOrder));
       setOrders(data);
       calculateStats(data);
@@ -295,7 +298,10 @@ export function ShippedOrdersList() {
           
           {selectedCount > 0 && (
             <button
-              onClick={() => setShowCreateModal(true)}
+              onClick={() => {
+                console.log('Opening modal with orders:', getSelectedOrdersData());
+                setShowCreateModal(true);
+              }}
               className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors flex items-center gap-2"
             >
               <Layers className="w-4 h-4" />
@@ -378,11 +384,16 @@ export function ShippedOrdersList() {
       {/* Модальное окно создания консоли */}
       <CreateConsolidationModal
         isOpen={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
+        onClose={() => {
+          console.log('Closing modal');
+          setShowCreateModal(false);
+        }}
         selectedOrders={getSelectedOrdersData()}
         onSuccess={() => {
+          console.log('Success callback');
           fetchShippedOrders();
           setSelectedOrders(new Set());
+          setShowCreateModal(false);
         }}
       />
     </div>

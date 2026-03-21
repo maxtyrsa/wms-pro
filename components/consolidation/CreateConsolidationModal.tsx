@@ -35,6 +35,9 @@ export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSu
     notes: ''
   });
 
+  console.log('Modal isOpen:', isOpen);
+  console.log('Selected orders:', selectedOrders);
+
   if (!isOpen) return null;
 
   const carriers = [...new Set(selectedOrders.map(o => o.carrier))];
@@ -90,6 +93,8 @@ export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSu
         responsiblePerson: formData.responsiblePerson,
         notes: formData.notes
       };
+
+      console.log('Creating consolidation:', consolidationData);
 
       const docRef = await addDoc(collection(db, 'consolidations'), consolidationData);
 
@@ -149,7 +154,7 @@ export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSu
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-6 space-y-6">
+            <form onSubmit={handleSubmit} className="p-6 space-y-6 max-h-[80vh] overflow-y-auto">
               <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl space-y-3">
                 <h3 className="font-semibold text-slate-900 dark:text-white">Параметры партии</h3>
                 <div className="grid grid-cols-2 gap-4 text-sm">
