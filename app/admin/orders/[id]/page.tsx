@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
-impoaff rt { motion } from 'motion/react';
+import { motion } from 'motion/react';
 import { ArrowLeft, Loader2, Package, Truck, Clock, Info, Hash, Weight, Box, CheckCircle2, X, Edit2, Save } from 'lucide-react';
 import Link from 'next/link';
 import { format } from 'date-fns';

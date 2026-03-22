@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { 
@@ -13,31 +13,9 @@ import {
 import { showToast } from '@/components/Toast';
 import { CreateConsolidationModal } from '@/components/consolidation/CreateConsolidationModal';
 
-interface ShippedOrder {
-  id: string;
-  orderNumber?: string;
-  carrier: string;
-  status: string;
-  createdAt: string;
-  createdBy: string;
-  totalWeight?: number;
-  totalVolume?: number;
-  profit?: number;
-  quantity?: number;
-  payment_sum?: number;
-}
-
-interface ShipmentStats {
-  totalOrders: number;
-  totalWeight: number;
-  totalVolume: number;
-  totalProfit: number;
-  carriers: Record<string, number>;
-}
-
 export function ShippedOrdersList() {
-  const [orders, setOrders] = useState<ShippedOrder[]>([]);
-  const [filteredOrders, setFilteredOrders] = useState<ShippedOrder[]>([]);
+  const [orders, setOrders] = useState<any[]>([]);
+  const [filteredOrders, setFilteredOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCarrier, setSelectedCarrier] = useState<string>('all');
@@ -47,12 +25,12 @@ export function ShippedOrdersList() {
     start: format(startOfDay(new Date()), 'yyyy-MM-dd'),
     end: format(endOfDay(new Date()), 'yyyy-MM-dd'),
   });
-  const [stats, setStats] = useState<ShipmentStats>({
+  const [stats, setStats] = useState({
     totalOrders: 0,
     totalWeight: 0,
     totalVolume: 0,
     totalProfit: 0,
-    carriers: {}
+    carriers: {} as Record<string, number>
   });
 
   useEffect(() => {
@@ -66,31 +44,47 @@ export function ShippedOrdersList() {
   const fetchShippedOrders = async () => {
     setLoading(true);
     try {
+      console.log('📦 Загрузка заказов со статусом "Оформлен"...');
+      
+      // Упрощенный запрос - без orderBy, чтобы не требовать сложный индекс
       const q = query(
         collection(db, 'orders'),
-        where('status', '==', 'Оформлен'),
-        where('carrier', '!=', 'Самовывоз'),
-        orderBy('createdAt', 'desc')
+        where('status', '==', 'Оформлен')
       );
+      
       const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => ({ 
-        id: doc.id, 
-        ...doc.data(),
-        quantity: doc.data().quantity || 1,
-        payment_sum: doc.data().payment_sum || 0,
-        profit: doc.data().profit || 0
-      } as ShippedOrder));
-      setOrders(data);
-      calculateStats(data);
+      console.log(`✅ Найдено заказов: ${snapshot.docs.length}`);
+      
+      const data = snapshot.docs.map(doc => {
+        const orderData = doc.data();
+        console.log(`   - Заказ ${orderData.orderNumber}: ${orderData.carrier}, статус: ${orderData.status}`);
+        return { 
+          id: doc.id, 
+          ...orderData,
+          quantity: orderData.quantity || 1,
+          payment_sum: orderData.payment_sum || 0,
+          profit: orderData.profit || 0
+        };
+      });
+      
+      // Фильтруем "Самовывоз" на клиенте
+      const filteredData = data.filter(order => order.carrier !== 'Самовывоз');
+      console.log(`✅ После фильтрации "Самовывоз": ${filteredData.length} заказов`);
+      
+      // Сортируем на клиенте по дате создания (новые сверху)
+      filteredData.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      
+      setOrders(filteredData);
+      calculateStats(filteredData);
     } catch (error) {
-      console.error('Error fetching shipped orders:', error);
+      console.error('❌ Ошибка загрузки заказов:', error);
       showToast('Ошибка при загрузке заказов', 'error');
     } finally {
       setLoading(false);
     }
   };
 
-  const calculateStats = (ordersData: ShippedOrder[]) => {
+  const calculateStats = (ordersData: any[]) => {
     const carriers: Record<string, number> = {};
     let totalWeight = 0;
     let totalVolume = 0;
@@ -174,8 +168,6 @@ export function ShippedOrdersList() {
 
   const clearSearch = () => setSearchQuery('');
 
-  const carriers = ['all', ...Object.keys(stats.carriers)];
-
   const getCarrierColor = (carrier: string) => {
     const colors: Record<string, string> = {
       'CDEK': 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
@@ -191,6 +183,7 @@ export function ShippedOrdersList() {
     return (
       <div className="flex items-center justify-center py-12">
         <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+        <span className="ml-2 text-slate-500">Загрузка заказов...</span>
       </div>
     );
   }
@@ -201,30 +194,10 @@ export function ShippedOrdersList() {
     <div className="space-y-6">
       {/* Статистика */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatsCard 
-          title="Готовы к отправке" 
-          value={stats.totalOrders.toString()} 
-          icon={<Package className="w-5 h-5" />}
-          color="blue"
-        />
-        <StatsCard 
-          title="Общий вес" 
-          value={`${stats.totalWeight.toFixed(1)} кг`} 
-          icon={<TrendingUp className="w-5 h-5" />}
-          color="emerald"
-        />
-        <StatsCard 
-          title="Общий объем" 
-          value={`${stats.totalVolume.toFixed(4)} м³`} 
-          icon={<BarChart3 className="w-5 h-5" />}
-          color="purple"
-        />
-        <StatsCard 
-          title="Общая прибыль" 
-          value={`${stats.totalProfit.toLocaleString()} ₽`} 
-          icon={<CheckCircle2 className="w-5 h-5" />}
-          color="orange"
-        />
+        <StatsCard title="Готовы к отправке" value={stats.totalOrders.toString()} icon={<Package className="w-5 h-5" />} color="blue" />
+        <StatsCard title="Общий вес" value={`${stats.totalWeight.toFixed(1)} кг`} icon={<TrendingUp className="w-5 h-5" />} color="emerald" />
+        <StatsCard title="Общий объем" value={`${stats.totalVolume.toFixed(4)} м³`} icon={<BarChart3 className="w-5 h-5" />} color="purple" />
+        <StatsCard title="Общая прибыль" value={`${stats.totalProfit.toLocaleString()} ₽`} icon={<CheckCircle2 className="w-5 h-5" />} color="orange" />
       </div>
 
       {/* Фильтры */}
@@ -245,18 +218,16 @@ export function ShippedOrdersList() {
               </button>
             )}
           </div>
-
           <select
             value={selectedCarrier}
             onChange={(e) => setSelectedCarrier(e.target.value)}
             className="px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
           >
             <option value="all">Все ТК</option>
-            {carriers.filter(c => c !== 'all').map(carrier => (
+            {Object.keys(stats.carriers).map(carrier => (
               <option key={carrier} value={carrier}>{carrier}</option>
             ))}
           </select>
-
           <div className="flex gap-2">
             <input
               type="date"
@@ -274,6 +245,15 @@ export function ShippedOrdersList() {
           </div>
         </div>
       </div>
+
+      {/* Если нет заказов */}
+      {orders.length === 0 && !loading && (
+        <div className="text-center py-12 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800">
+          <Package className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
+          <p className="text-slate-400 dark:text-slate-500 mb-2">Нет заказов, готовых к отправке</p>
+          <p className="text-xs text-slate-400">Убедитесь, что у вас есть заказы со статусом "Оформлен"</p>
+        </div>
+      )}
 
       {/* Панель выбора и создания консоли */}
       {filteredOrders.length > 0 && (
@@ -298,10 +278,7 @@ export function ShippedOrdersList() {
           
           {selectedCount > 0 && (
             <button
-              onClick={() => {
-                console.log('Opening modal with orders:', getSelectedOrdersData());
-                setShowCreateModal(true);
-              }}
+              onClick={() => setShowCreateModal(true)}
               className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors flex items-center gap-2"
             >
               <Layers className="w-4 h-4" />
@@ -311,15 +288,8 @@ export function ShippedOrdersList() {
         </div>
       )}
 
-      {/* Список заказов с чекбоксами */}
-      {filteredOrders.length === 0 ? (
-        <div className="text-center py-12 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800">
-          <Package className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
-          <p className="text-slate-400 dark:text-slate-500">
-            {orders.length === 0 ? 'Нет заказов, готовых к отправке' : 'Заказы не найдены по выбранным фильтрам'}
-          </p>
-        </div>
-      ) : (
+      {/* Список заказов */}
+      {filteredOrders.length > 0 && (
         <div className="space-y-3">
           {filteredOrders.map(order => (
             <div
@@ -381,19 +351,14 @@ export function ShippedOrdersList() {
         </div>
       )}
 
-      {/* Модальное окно создания консоли */}
+      {/* Модальное окно */}
       <CreateConsolidationModal
         isOpen={showCreateModal}
-        onClose={() => {
-          console.log('Closing modal');
-          setShowCreateModal(false);
-        }}
+        onClose={() => setShowCreateModal(false)}
         selectedOrders={getSelectedOrdersData()}
         onSuccess={() => {
-          console.log('Success callback');
           fetchShippedOrders();
           setSelectedOrders(new Set());
-          setShowCreateModal(false);
         }}
       />
     </div>
