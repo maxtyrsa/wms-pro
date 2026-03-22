@@ -1,10 +1,10 @@
 {
-  "projectId": "gen-lang-client-0109303863",
-  "appId": "1:1081228708505:web:34745dd8b594bd5e9e8608",
-  "apiKey": "AIzaSyCGlpa6xhjiiQqgFJ1flEV-1LHefky_rJA",
-  "authDomain": "gen-lang-client-0109303863.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-05925b54-c8dc-4b45-a977-a855b2d9cc42",
-  "storageBucket": "gen-lang-client-0109303863.firebasestorage.app",
-  "messagingSenderId": "1081228708505",
-  "measurementId": ""
+  "projectId": "warehouse-wms-2026",
+  "appId": "1:90597914013:web:a152bd00e3549dc94f2b74",
+  "apiKey": "AIzaSyBOPbZA5WUvqnpDSE1CmxlGcj2LDvVnVXo",
+  "authDomain": "warehouse-wms-2026.firebaseapp.com",
+  "firestoreDatabaseId": "warehouse-wms-2026",
+  "storageBucket": "warehouse-wms-2026.firebasestorage.app",
+  "messagingSenderId": "90597914013",
+  "measurementId": "G-B0LXF8L3SL"
 }
