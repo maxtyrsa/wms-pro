@@ -2,21 +2,26 @@
 
 import React, { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, orderBy, getDocs, limit, startAfter } from 'firebase/firestore';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { 
   Package, Search, XCircle, Truck, 
   CheckCircle2, Loader2, BarChart3,
-  TrendingUp, Layers
+  TrendingUp, Layers, ChevronRight
 } from 'lucide-react';
 import { showToast } from '@/components/Toast';
 import { CreateConsolidationModal } from '@/components/consolidation/CreateConsolidationModal';
+
+const PAGE_SIZE = 50;
 
 export function ShippedOrdersList() {
   const [orders, setOrders] = useState<any[]>([]);
   const [filteredOrders, setFilteredOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [lastDoc, setLastDoc] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCarrier, setSelectedCarrier] = useState<string>('all');
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
@@ -41,15 +46,19 @@ export function ShippedOrdersList() {
     applyFilters();
   }, [orders, searchQuery, selectedCarrier, dateRange]);
 
+  // НОРМАЛЬНЫЙ ЗАПРОС С ИНДЕКСОМ
   const fetchShippedOrders = async () => {
     setLoading(true);
     try {
-      console.log('📦 Загрузка заказов со статусом "Оформлен"...');
+      console.log('📦 Загрузка заказов со статусом "Оформлен" (с индексом)...');
       
-      // Упрощенный запрос - без orderBy, чтобы не требовать сложный индекс
+      // Правильный запрос с фильтрацией на сервере
       const q = query(
         collection(db, 'orders'),
-        where('status', '==', 'Оформлен')
+        where('status', '==', 'Оформлен'),
+        where('carrier', '!=', 'Самовывоз'),
+        orderBy('createdAt', 'desc'),
+        limit(PAGE_SIZE)
       );
       
       const snapshot = await getDocs(q);
@@ -57,7 +66,6 @@ export function ShippedOrdersList() {
       
       const data = snapshot.docs.map(doc => {
         const orderData = doc.data();
-        console.log(`   - Заказ ${orderData.orderNumber}: ${orderData.carrier}, статус: ${orderData.status}`);
         return { 
           id: doc.id, 
           ...orderData,
@@ -67,20 +75,52 @@ export function ShippedOrdersList() {
         };
       });
       
-      // Фильтруем "Самовывоз" на клиенте
-      const filteredData = data.filter(order => order.carrier !== 'Самовывоз');
-      console.log(`✅ После фильтрации "Самовывоз": ${filteredData.length} заказов`);
-      
-      // Сортируем на клиенте по дате создания (новые сверху)
-      filteredData.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      
-      setOrders(filteredData);
-      calculateStats(filteredData);
+      setOrders(data);
+      setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
+      setHasMore(snapshot.docs.length === PAGE_SIZE);
+      calculateStats(data);
     } catch (error) {
       console.error('❌ Ошибка загрузки заказов:', error);
       showToast('Ошибка при загрузке заказов', 'error');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadMore = async () => {
+    if (!hasMore || loadingMore || !lastDoc) return;
+    
+    setLoadingMore(true);
+    try {
+      const q = query(
+        collection(db, 'orders'),
+        where('status', '==', 'Оформлен'),
+        where('carrier', '!=', 'Самовывоз'),
+        orderBy('createdAt', 'desc'),
+        startAfter(lastDoc),
+        limit(PAGE_SIZE)
+      );
+      
+      const snapshot = await getDocs(q);
+      const newOrders = snapshot.docs.map(doc => {
+        const orderData = doc.data();
+        return { 
+          id: doc.id, 
+          ...orderData,
+          quantity: orderData.quantity || 1,
+          payment_sum: orderData.payment_sum || 0,
+          profit: orderData.profit || 0
+        };
+      });
+      
+      setOrders(prev => [...prev, ...newOrders]);
+      setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
+      setHasMore(snapshot.docs.length === PAGE_SIZE);
+    } catch (error) {
+      console.error('Error loading more:', error);
+      showToast('Ошибка при загрузке дополнительных заказов', 'error');
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -290,65 +330,85 @@ export function ShippedOrdersList() {
 
       {/* Список заказов */}
       {filteredOrders.length > 0 && (
-        <div className="space-y-3">
-          {filteredOrders.map(order => (
-            <div
-              key={order.id}
-              className={`p-4 rounded-2xl border shadow-sm transition-all cursor-pointer hover:shadow-md ${
-                selectedOrders.has(order.id)
-                  ? 'bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800'
-                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
-              }`}
-              onClick={() => toggleOrderSelection(order.id)}
-            >
-              <div className="flex items-start justify-between flex-wrap gap-4">
-                <div className="flex items-start gap-3">
-                  <input
-                    type="checkbox"
-                    checked={selectedOrders.has(order.id)}
-                    onChange={() => {}}
-                    onClick={(e) => e.stopPropagation()}
-                    className="mt-1 w-4 h-4 rounded border-slate-300"
-                  />
-                  <div className="flex-1 min-w-[200px]">
-                    <div className="flex items-center gap-3 mb-3 flex-wrap">
-                      <h3 className="font-bold text-lg text-slate-900 dark:text-white">
-                        Заказ №{order.orderNumber || 'Без номера'}
-                      </h3>
-                      <span className={`px-2 py-1 rounded-lg text-[10px] font-bold ${getCarrierColor(order.carrier)}`}>
-                        {order.carrier}
-                      </span>
-                      <span className="px-2 py-1 rounded-lg text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
-                        Оформлен
-                      </span>
-                    </div>
-                    
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                      <div>
-                        <p className="text-slate-500 dark:text-slate-400 text-xs">Сборщик</p>
-                        <p className="font-medium text-slate-700 dark:text-slate-300">{order.createdBy?.split('@')[0] || '—'}</p>
+        <>
+          <div className="space-y-3">
+            {filteredOrders.map(order => (
+              <div
+                key={order.id}
+                className={`p-4 rounded-2xl border shadow-sm transition-all cursor-pointer hover:shadow-md ${
+                  selectedOrders.has(order.id)
+                    ? 'bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800'
+                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
+                }`}
+                onClick={() => toggleOrderSelection(order.id)}
+              >
+                <div className="flex items-start justify-between flex-wrap gap-4">
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedOrders.has(order.id)}
+                      onChange={() => {}}
+                      onClick={(e) => e.stopPropagation()}
+                      className="mt-1 w-4 h-4 rounded border-slate-300"
+                    />
+                    <div className="flex-1 min-w-[200px]">
+                      <div className="flex items-center gap-3 mb-3 flex-wrap">
+                        <h3 className="font-bold text-lg text-slate-900 dark:text-white">
+                          Заказ №{order.orderNumber || 'Без номера'}
+                        </h3>
+                        <span className={`px-2 py-1 rounded-lg text-[10px] font-bold ${getCarrierColor(order.carrier)}`}>
+                          {order.carrier}
+                        </span>
+                        <span className="px-2 py-1 rounded-lg text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+                          Оформлен
+                        </span>
                       </div>
-                      <div>
-                        <p className="text-slate-500 dark:text-slate-400 text-xs">Мест</p>
-                        <p className="font-medium text-slate-700 dark:text-slate-300">{order.quantity || 1}</p>
-                      </div>
-                      <div>
-                        <p className="text-slate-500 dark:text-slate-400 text-xs">Вес</p>
-                        <p className="font-medium text-slate-700 dark:text-slate-300">{order.totalWeight?.toFixed(1) || 0} кг</p>
-                      </div>
-                      <div>
-                        <p className="text-slate-500 dark:text-slate-400 text-xs">Прибыль</p>
-                        <p className="font-bold text-emerald-600 dark:text-emerald-400">
-                          {order.profit ? `${order.profit.toLocaleString()} ₽` : '—'}
-                        </p>
+                      
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                        <div>
+                          <p className="text-slate-500 dark:text-slate-400 text-xs">Сборщик</p>
+                          <p className="font-medium text-slate-700 dark:text-slate-300">{order.createdBy?.split('@')[0] || '—'}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500 dark:text-slate-400 text-xs">Мест</p>
+                          <p className="font-medium text-slate-700 dark:text-slate-300">{order.quantity || 1}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500 dark:text-slate-400 text-xs">Вес</p>
+                          <p className="font-medium text-slate-700 dark:text-slate-300">{order.totalWeight?.toFixed(1) || 0} кг</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500 dark:text-slate-400 text-xs">Прибыль</p>
+                          <p className="font-bold text-emerald-600 dark:text-emerald-400">
+                            {order.profit ? `${order.profit.toLocaleString()} ₽` : '—'}
+                          </p>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
+            ))}
+          </div>
+          
+          {/* Кнопка загрузки еще */}
+          {hasMore && (
+            <div className="flex justify-center pt-4">
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50"
+              >
+                {loadingMore ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <ChevronRight className="w-4 h-4" />
+                )}
+                Загрузить еще
+              </button>
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
 
       {/* Модальное окно */}

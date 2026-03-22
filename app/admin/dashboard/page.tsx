@@ -6,10 +6,8 @@ import { useRouter } from 'next/navigation';
 import { 
   collection, 
   query, 
-  where, 
   getDocs,
-  orderBy,
-  Timestamp
+  orderBy
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { 
@@ -22,12 +20,12 @@ import {
   ResponsiveContainer, 
   BarChart, 
   Bar, 
-  Cell,
-  Legend,
+  AreaChart,
+  Area,
   PieChart,
   Pie,
-  AreaChart,
-  Area
+  Cell,
+  Legend
 } from 'recharts';
 import { 
   LayoutDashboard, 
@@ -39,10 +37,10 @@ import {
   Package,
   Loader2,
   Calendar,
-  ArrowUpRight,
-  ArrowDownRight,
   ArrowLeft,
-  Filter
+  Filter,
+  Truck,
+  DollarSign
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { format, startOfWeek, endOfWeek, eachDayOfInterval, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
@@ -60,7 +58,24 @@ interface Order {
   payment_sum?: number;
   delivery_cost?: number;
   profit?: number;
+  carrier: string;
 }
+
+// Цвета для ТК
+const CARRIER_COLORS: Record<string, string> = {
+  'CDEK': '#2563eb',
+  'DPD': '#f97316',
+  'Деловые линии': '#10b981',
+  'Почта России': '#ef4444',
+  'ПЭК': '#8b5cf6',
+  'Самовывоз': '#6b7280',
+  'OZON_FBS': '#ec489a',
+  'WB_FBS': '#a855f7',
+  'Yandex Market': '#f59e0b',
+  'AliExpress': '#e11d48',
+  'OZON_FBO': '#db2777',
+  'WB_FBO': '#c084fc',
+};
 
 export default function AdminDashboard() {
   const { role, loading: authLoading } = useAuth();
@@ -111,7 +126,7 @@ export default function AdminDashboard() {
     });
   }, [orders, dateFilter]);
 
-  // Stats Calculations с правильными расчетами
+  // Статистика
   const stats = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -127,30 +142,24 @@ export default function AdminDashboard() {
     let totalProfit = 0;
 
     filteredOrders.forEach(o => {
-      // Вес и объем
       if (o.totalWeight) totalWeight += Number(o.totalWeight) || 0;
       if (o.totalVolume) totalVolume += Number(o.totalVolume) || 0;
       
-      // Время сборки (в секундах)
       if (o.time_start && o.time_end) {
         const start = new Date(o.time_start).getTime();
         const end = new Date(o.time_end).getTime();
         if (!isNaN(start) && !isNaN(end)) {
-          const seconds = (end - start) / 1000;
-          totalAssemblySeconds += seconds;
+          totalAssemblySeconds += (end - start) / 1000;
           assembledCount++;
         }
       }
       
-      // Финансы
       if (o.payment_sum) totalPaymentSum += Number(o.payment_sum) || 0;
       if (o.delivery_cost) totalDeliveryCost += Number(o.delivery_cost) || 0;
       if (o.profit) totalProfit += Number(o.profit) || 0;
     });
 
-    const avgAssemblySeconds = assembledCount > 0 
-      ? Math.round(totalAssemblySeconds / assembledCount)
-      : 0;
+    const avgAssemblySeconds = assembledCount > 0 ? Math.round(totalAssemblySeconds / assembledCount) : 0;
     const avgAssemblyMinutes = Math.floor(avgAssemblySeconds / 60);
     const avgAssemblySecondsRemainder = avgAssemblySeconds % 60;
     const avgAssemblyFormatted = `${avgAssemblyMinutes}:${avgAssemblySecondsRemainder.toString().padStart(2, '0')}`;
@@ -168,7 +177,7 @@ export default function AdminDashboard() {
     };
   }, [filteredOrders]);
 
-  // График заказов по дням недели (за выбранный период)
+  // График заказов по дням недели
   const weeklyChartData = useMemo(() => {
     const dayNames = ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС'];
     const dayCounts = [0, 0, 0, 0, 0, 0, 0];
@@ -176,42 +185,63 @@ export default function AdminDashboard() {
     filteredOrders.forEach(order => {
       const orderDate = new Date(order.createdAt);
       const dayOfWeek = orderDate.getDay();
-      // Преобразуем день недели (0=ВС, 1=ПН...) в индекс массива (0=ПН)
       let index = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
       dayCounts[index]++;
     });
     
-    return dayNames.map((name, i) => ({
-      name,
-      заказы: dayCounts[i]
-    }));
+    return dayNames.map((name, i) => ({ name, заказы: dayCounts[i] }));
   }, [filteredOrders]);
 
-  // График динамики заказов по дням (за выбранный период)
+  // График динамики заказов по дням
   const dailyChartData = useMemo(() => {
     const start = startOfDay(new Date(dateFilter.start));
     const end = endOfDay(new Date(dateFilter.end));
-    
     const days = eachDayOfInterval({ start, end });
     
     return days.map(day => {
       const dayStart = startOfDay(day);
       const dayEnd = endOfDay(day);
-      
       const count = filteredOrders.filter(order => {
         const orderDate = new Date(order.createdAt);
         return orderDate >= dayStart && orderDate <= dayEnd;
       }).length;
-      
-      return {
-        date: format(day, 'dd.MM'),
-        orders: count,
-        fullDate: format(day, 'yyyy-MM-dd')
-      };
+      return { date: format(day, 'dd.MM'), orders: count };
     });
   }, [filteredOrders, dateFilter]);
 
-  // Топ сотрудников по количеству заказов
+  // Заказы по транспортным компаниям
+  const carrierChartData = useMemo(() => {
+    const carrierStats: Record<string, number> = {};
+    
+    filteredOrders.forEach(order => {
+      if (order.carrier && order.status !== 'Отменен') {
+        carrierStats[order.carrier] = (carrierStats[order.carrier] || 0) + 1;
+      }
+    });
+    
+    return Object.entries(carrierStats)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8);
+  }, [filteredOrders]);
+
+  // Прибыль по ТК
+  const profitByCarrierData = useMemo(() => {
+    const carrierProfit: Record<string, number> = {};
+    
+    filteredOrders.forEach(order => {
+      if (order.carrier && order.profit && order.profit > 0) {
+        carrierProfit[order.carrier] = (carrierProfit[order.carrier] || 0) + order.profit;
+      }
+    });
+    
+    return Object.entries(carrierProfit)
+      .map(([name, profit]) => ({ name, profit }))
+      .sort((a, b) => b.profit - a.profit)
+      .slice(0, 8);
+  }, [filteredOrders]);
+
+  // Топ сотрудников
   const topEmployees = useMemo(() => {
     const employeeStats: Record<string, { count: number; totalTime: number; assembled: number }> = {};
     
@@ -244,47 +274,46 @@ export default function AdminDashboard() {
 
   if (authLoading || loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
         <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-4 md:p-8 transition-colors duration-200">
       <div className="max-w-7xl mx-auto space-y-8">
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             <button 
               onClick={() => router.back()}
-              className="p-2 hover:bg-white rounded-full transition-colors border border-transparent hover:border-slate-200"
+              className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-full transition-colors border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
             >
-              <ArrowLeft className="w-6 h-6 text-slate-600" />
+              <ArrowLeft className="w-6 h-6 text-slate-600 dark:text-slate-400" />
             </button>
             <div>
-              <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
+              <h1 className="text-3xl font-bold text-slate-900 dark:text-white flex items-center gap-3">
                 <LayoutDashboard className="w-8 h-8 text-blue-600" />
                 Панель управления
               </h1>
-              <p className="text-slate-500">Статистика склада в реальном времени</p>
+              <p className="text-slate-500 dark:text-slate-400">Статистика склада в реальном времени</p>
             </div>
           </div>
           
-          {/* Фильтр по дате */}
-          <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-xl border border-slate-200 shadow-sm">
+          <div className="flex items-center gap-2 bg-white dark:bg-slate-900 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
             <Filter className="w-4 h-4 text-slate-400" />
             <input
               type="date"
               value={dateFilter.start}
               onChange={(e) => setDateFilter({ ...dateFilter, start: e.target.value })}
-              className="text-sm border-none focus:ring-0 outline-none"
+              className="text-sm border-none focus:ring-0 outline-none bg-transparent dark:text-white"
             />
             <span className="text-slate-400">—</span>
             <input
               type="date"
               value={dateFilter.end}
               onChange={(e) => setDateFilter({ ...dateFilter, end: e.target.value })}
-              className="text-sm border-none focus:ring-0 outline-none"
+              className="text-sm border-none focus:ring-0 outline-none bg-transparent dark:text-white"
             />
           </div>
         </header>
@@ -343,14 +372,13 @@ export default function AdminDashboard() {
 
         {/* Charts Section */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* График заказов по дням недели */}
-          <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
             <div className="flex items-center justify-between mb-8">
-              <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <Calendar className="w-5 h-5 text-blue-600" />
                 Заказы по дням недели
               </h2>
-              <span className="text-xs text-slate-400 font-bold uppercase tracking-wider">
+              <span className="text-xs text-slate-400 font-bold uppercase">
                 {format(new Date(dateFilter.start), 'dd.MM')} - {format(new Date(dateFilter.end), 'dd.MM')}
               </span>
             </div>
@@ -358,133 +386,150 @@ export default function AdminDashboard() {
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={weeklyChartData}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis 
-                    dataKey="name" 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tick={{ fill: '#94a3b8', fontSize: 12 }}
-                    dy={10}
-                  />
-                  <YAxis 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tick={{ fill: '#94a3b8', fontSize: 12 }}
-                  />
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: '#fff', 
-                      borderRadius: '12px', 
-                      border: '1px solid #e2e8f0',
-                      boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
-                    }}
-                  />
-                  <Bar 
-                    dataKey="заказы" 
-                    fill="#2563eb" 
-                    radius={[8, 8, 0, 0]} 
-                    barSize={40}
-                  />
+                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                  <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }} />
+                  <Bar dataKey="заказы" fill="#2563eb" radius={[8, 8, 0, 0]} barSize={40} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
 
-          {/* График динамики заказов по дням */}
-          <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
             <div className="flex items-center justify-between mb-8">
-              <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <TrendingUp className="w-5 h-5 text-emerald-600" />
                 Динамика заказов
               </h2>
-              <span className="text-xs text-slate-400 font-bold uppercase tracking-wider">
-                По дням
-              </span>
             </div>
             <div className="h-[300px] w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={dailyChartData}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis 
-                    dataKey="date" 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tick={{ fill: '#94a3b8', fontSize: 12 }}
-                    dy={10}
-                  />
-                  <YAxis 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tick={{ fill: '#94a3b8', fontSize: 12 }}
-                  />
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: '#fff', 
-                      borderRadius: '12px', 
-                      border: '1px solid #e2e8f0',
-                      boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
-                    }}
-                    labelFormatter={(label) => `Дата: ${label}`}
-                  />
-                  <Area 
-                    type="monotone" 
-                    dataKey="orders" 
-                    stroke="#10b981" 
-                    strokeWidth={3}
-                    fill="url(#colorGradient)" 
-                    fillOpacity={0.3}
-                  />
-                  <defs>
-                    <linearGradient id="colorGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
+                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                  <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }} />
+                  <Area type="monotone" dataKey="orders" stroke="#10b981" strokeWidth={3} fill="#10b981" fillOpacity={0.2} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
           </div>
         </div>
 
-        {/* Employee Performance */}
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+        {/* Графики по ТК */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Круговая диаграмма: Заказы по ТК */}
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
+            <div className="flex items-center justify-between mb-8">
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Truck className="w-5 h-5 text-blue-600" />
+                Заказы по ТК
+              </h2>
+              <span className="text-xs text-slate-400 font-bold uppercase">
+                Всего: {stats.totalCount}
+              </span>
+            </div>
+            <div className="h-[350px] w-full">
+              {carrierChartData.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={carrierChartData}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                      outerRadius={120}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {carrierChartData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={CARRIER_COLORS[entry.name] || `#${Math.floor(Math.random()*16777215).toString(16)}`} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(value) => [`${value} заказов`, 'Количество']} />
+                    <Legend verticalAlign="bottom" height={36} />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex items-center justify-center h-full text-slate-400">
+                  Нет данных за выбранный период
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Столбчатая диаграмма: Прибыль по ТК (исправленная) */}
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
+            <div className="flex items-center justify-between mb-8">
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <DollarSign className="w-5 h-5 text-emerald-600" />
+                Прибыль по ТК (₽)
+              </h2>
+              <span className="text-xs text-slate-400 font-bold uppercase">
+                Всего: {stats.totalProfit.toLocaleString()} ₽
+              </span>
+            </div>
+            <div className="h-[350px] w-full">
+              {profitByCarrierData.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart 
+                    data={profitByCarrierData} 
+                    layout="vertical" 
+                    margin={{ top: 20, right: 30, left: 100, bottom: 20 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#f1f5f9" />
+                    <XAxis 
+                      type="number" 
+                      tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
+                      tick={{ fontSize: 11 }}
+                    />
+                    <YAxis 
+                      type="category" 
+                      dataKey="name" 
+                      width={90} 
+                      tick={{ fontSize: 11, fill: '#94a3b8' }}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <Tooltip 
+                      formatter={(value) => [`${value.toLocaleString()} ₽`, 'Прибыль']}
+                      contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}
+                    />
+                    <Bar 
+                      dataKey="profit" 
+                      fill="#10b981" 
+                      radius={[0, 8, 8, 0]}
+                      barSize={32}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex items-center justify-center h-full text-slate-400">
+                  Нет данных о прибыли за выбранный период
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Эффективность сотрудников */}
+        <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
           <div className="flex items-center justify-between mb-8">
-            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <Users className="w-5 h-5 text-emerald-600" />
               Эффективность сотрудников
             </h2>
-            <span className="text-xs text-slate-400 font-bold uppercase tracking-wider">Топ 5</span>
+            <span className="text-xs text-slate-400 font-bold uppercase">Топ 5</span>
           </div>
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={topEmployees}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis 
-                  dataKey="name" 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{ fill: '#94a3b8', fontSize: 12 }}
-                  dy={10}
-                />
-                <YAxis 
-                  yAxisId="left"
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{ fill: '#94a3b8', fontSize: 12 }}
-                />
-                <YAxis 
-                  yAxisId="right"
-                  orientation="right"
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{ fill: '#94a3b8', fontSize: 12 }}
-                />
-                <Tooltip 
-                  contentStyle={{ 
-                    backgroundColor: '#fff', 
-                    borderRadius: '12px', 
-                    border: '1px solid #e2e8f0'
-                  }}
-                />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
+                <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }} />
                 <Legend verticalAlign="top" align="right" height={36} iconType="circle" />
                 <Bar yAxisId="left" dataKey="orders" name="Заказов" fill="#2563eb" radius={[4, 4, 0, 0]} barSize={24} />
                 <Bar yAxisId="right" dataKey="avgTime" name="Ср. время (мин)" fill="#10b981" radius={[4, 4, 0, 0]} barSize={24} />
@@ -499,17 +544,17 @@ export default function AdminDashboard() {
 
 function StatCard({ title, value, icon, color, subtitle }: any) {
   const colors: any = {
-    blue: 'bg-blue-50 text-blue-600 border-blue-100',
-    emerald: 'bg-emerald-50 text-emerald-600 border-emerald-100',
-    orange: 'bg-orange-50 text-orange-600 border-orange-100',
-    violet: 'bg-violet-50 text-violet-600 border-violet-100'
+    blue: 'bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-400 border-blue-100 dark:border-blue-800',
+    emerald: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30 dark:text-emerald-400 border-emerald-100 dark:border-emerald-800',
+    orange: 'bg-orange-50 text-orange-600 dark:bg-orange-950/30 dark:text-orange-400 border-orange-100 dark:border-orange-800',
+    violet: 'bg-violet-50 text-violet-600 dark:bg-violet-950/30 dark:text-violet-400 border-violet-100 dark:border-violet-800'
   };
 
   return (
     <motion.div 
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 relative overflow-hidden group"
+      className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 relative overflow-hidden group"
     >
       <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-4 border ${colors[color]}`}>
         {icon}
@@ -517,19 +562,13 @@ function StatCard({ title, value, icon, color, subtitle }: any) {
       <div className="space-y-1">
         <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">{title}</p>
         <div className="flex items-baseline gap-3">
-          <h3 className="text-2xl font-black text-slate-900">{value}</h3>
+          <h3 className="text-2xl font-black text-slate-900 dark:text-white">{value}</h3>
         </div>
-        {subtitle && (
-          <p className="text-xs text-slate-500 mt-1">{subtitle}</p>
-        )}
+        {subtitle && <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{subtitle}</p>}
       </div>
       <div className="absolute -right-4 -bottom-4 opacity-[0.03] group-hover:scale-110 transition-transform duration-500">
         {React.cloneElement(icon, { size: 100 })}
       </div>
     </motion.div>
   );
-}
-
-function Truck({ className, size }: any) {
-  return <Package className={className} />;
 }

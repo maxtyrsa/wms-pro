@@ -2,11 +2,13 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, where, orderBy, getDocs, updateDoc, doc } from 'firebase/firestore';
+import { collection, query, where, orderBy, getDocs, updateDoc, doc, limit, startAfter } from 'firebase/firestore';
 import { format, differenceInDays } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { Package, Search, XCircle, CheckCircle2, Loader2, AlertTriangle, Clock, User, Calendar, Handshake } from 'lucide-react';
+import { Package, Search, XCircle, CheckCircle2, Loader2, AlertTriangle, Clock, User, Calendar, Handshake, ChevronRight } from 'lucide-react';
 import { showToast } from '@/components/Toast';
+
+const PAGE_SIZE = 30;
 
 interface PickupOrder {
   id: string;
@@ -25,6 +27,9 @@ interface PickupOrdersListProps {
 export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
   const [orders, setOrders] = useState<PickupOrder[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [lastDoc, setLastDoc] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
 
@@ -32,36 +37,57 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
     fetchPickupOrders();
   }, []);
 
-  const fetchPickupOrders = async () => {
-    setLoading(true);
+  // НОРМАЛЬНЫЙ ЗАПРОС С ИНДЕКСОМ
+  const fetchPickupOrders = async (loadMore = false) => {
+    if (loadMore) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+      setOrders([]);
+      setLastDoc(null);
+      setHasMore(true);
+    }
+
     try {
-      console.log('📦 Загрузка заказов Самовывоз со статусом "Готов к выдаче"...');
+      console.log('📦 Загрузка заказов Самовывоз (с индексом)...');
       
-      // Упрощенный запрос - только по статусу
-      const q = query(
+      let q = query(
         collection(db, 'orders'),
-        where('status', '==', 'Готов к выдаче')
+        where('status', '==', 'Готов к выдаче'),
+        where('carrier', '==', 'Самовывоз'),
+        orderBy('createdAt', 'desc'),
+        limit(PAGE_SIZE)
       );
+      
+      if (loadMore && lastDoc) {
+        q = query(q, startAfter(lastDoc));
+      }
       
       const snapshot = await getDocs(q);
       console.log(`✅ Найдено заказов: ${snapshot.docs.length}`);
       
-      // Фильтруем "Самовывоз" на клиенте
-      const allOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PickupOrder));
-      const filteredData = allOrders.filter(order => order.carrier === 'Самовывоз');
-      console.log(`✅ После фильтрации "Самовывоз": ${filteredData.length} заказов`);
+      const newOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PickupOrder));
       
-      // Сортируем на клиенте по дате создания (новые сверху)
-      filteredData.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      if (loadMore) {
+        setOrders(prev => [...prev, ...newOrders]);
+      } else {
+        setOrders(newOrders);
+      }
       
-      setOrders(filteredData);
+      if (snapshot.docs.length > 0) {
+        setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
+      }
+      setHasMore(snapshot.docs.length === PAGE_SIZE);
     } catch (error) {
       console.error('Error fetching pickup orders:', error);
       showToast('Ошибка при загрузке заказов', 'error');
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   };
+
+  const loadMoreOrders = () => fetchPickupOrders(true);
 
   const handleMarkAsIssued = async (orderId: string) => {
     if (!confirm('Подтвердите выдачу заказа клиенту?')) return;
@@ -159,89 +185,109 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
           <p className="text-slate-400 dark:text-slate-500">Нет заказов, готовых к выдаче</p>
         </div>
       ) : (
-        <div className="space-y-3">
-          {filteredOrders.map(order => {
-            const storageDays = getStorageDays(order.createdAt);
-            const storageColor = getStorageColor(storageDays);
-            const bgColor = getStorageBgColor(storageDays);
-            
-            return (
-              <div
-                key={order.id}
-                className={`p-4 rounded-2xl border shadow-sm transition-all ${storageColor} ${bgColor}`}
-              >
-                <div className="flex items-start justify-between flex-wrap gap-4">
-                  <div className="flex-1 min-w-[200px]">
-                    <div className="flex items-center gap-3 mb-3 flex-wrap">
-                      <h3 className="font-bold text-lg text-slate-900 dark:text-white">
-                        Заказ №{order.orderNumber || 'Без номера'}
-                      </h3>
-                      <span className="px-2 py-1 rounded-lg text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
-                        Готов к выдаче
-                      </span>
+        <>
+          <div className="space-y-3">
+            {filteredOrders.map(order => {
+              const storageDays = getStorageDays(order.createdAt);
+              const storageColor = getStorageColor(storageDays);
+              const bgColor = getStorageBgColor(storageDays);
+              
+              return (
+                <div
+                  key={order.id}
+                  className={`p-4 rounded-2xl border shadow-sm transition-all ${storageColor} ${bgColor}`}
+                >
+                  <div className="flex items-start justify-between flex-wrap gap-4">
+                    <div className="flex-1 min-w-[200px]">
+                      <div className="flex items-center gap-3 mb-3 flex-wrap">
+                        <h3 className="font-bold text-lg text-slate-900 dark:text-white">
+                          Заказ №{order.orderNumber || 'Без номера'}
+                        </h3>
+                        <span className="px-2 py-1 rounded-lg text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+                          Готов к выдаче
+                        </span>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                        <div className="flex items-center gap-2">
+                          <User className="w-4 h-4 text-slate-400" />
+                          <div>
+                            <p className="text-slate-500 dark:text-slate-400 text-xs">Сборщик</p>
+                            <p className="font-medium text-slate-700 dark:text-slate-300">{order.createdBy?.split('@')[0] || '—'}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Calendar className="w-4 h-4 text-slate-400" />
+                          <div>
+                            <p className="text-slate-500 dark:text-slate-400 text-xs">Дата создания</p>
+                            <p className="font-medium text-slate-700 dark:text-slate-300">
+                              {format(new Date(order.createdAt), 'dd.MM.yyyy HH:mm', { locale: ru })}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-slate-400" />
+                          <div>
+                            <p className="text-slate-500 dark:text-slate-400 text-xs">Время хранения</p>
+                            <p className={`font-bold ${storageDays > 30 ? 'text-red-600 dark:text-red-400' : storageDays > 14 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-700 dark:text-slate-300'}`}>
+                              {storageDays} {getDaysWord(storageDays)}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                     
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
-                      <div className="flex items-center gap-2">
-                        <User className="w-4 h-4 text-slate-400" />
-                        <div>
-                          <p className="text-slate-500 dark:text-slate-400 text-xs">Сборщик</p>
-                          <p className="font-medium text-slate-700 dark:text-slate-300">{order.createdBy?.split('@')[0] || '—'}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Calendar className="w-4 h-4 text-slate-400" />
-                        <div>
-                          <p className="text-slate-500 dark:text-slate-400 text-xs">Дата создания</p>
-                          <p className="font-medium text-slate-700 dark:text-slate-300">
-                            {format(new Date(order.createdAt), 'dd.MM.yyyy HH:mm', { locale: ru })}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Clock className="w-4 h-4 text-slate-400" />
-                        <div>
-                          <p className="text-slate-500 dark:text-slate-400 text-xs">Время хранения</p>
-                          <p className={`font-bold ${storageDays > 30 ? 'text-red-600 dark:text-red-400' : storageDays > 14 ? 'text-orange-600 dark:text-orange-400' : 'text-slate-700 dark:text-slate-300'}`}>
-                            {storageDays} {getDaysWord(storageDays)}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
+                    {/* Кнопка выдачи (только для администратора) */}
+                    {isAdmin && (
+                      <button
+                        onClick={() => handleMarkAsIssued(order.id)}
+                        disabled={updatingOrderId === order.id}
+                        className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2 whitespace-nowrap self-center"
+                      >
+                        {updatingOrderId === order.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Handshake className="w-4 h-4" />
+                        )}
+                        Выдать клиенту
+                      </button>
+                    )}
                   </div>
                   
-                  {/* Кнопка выдачи (только для администратора) */}
-                  {isAdmin && (
-                    <button
-                      onClick={() => handleMarkAsIssued(order.id)}
-                      disabled={updatingOrderId === order.id}
-                      className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2 whitespace-nowrap self-center"
-                    >
-                      {updatingOrderId === order.id ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Handshake className="w-4 h-4" />
-                      )}
-                      Выдать клиенту
-                    </button>
+                  {/* Предупреждение о длительном хранении */}
+                  {storageDays > 14 && (
+                    <div className={`mt-4 pt-3 border-t flex items-center gap-2 text-xs ${storageDays > 30 ? 'text-red-600 dark:text-red-400' : 'text-orange-600 dark:text-orange-400'}`}>
+                      <AlertTriangle className="w-4 h-4" />
+                      <span>
+                        {storageDays > 30 
+                          ? `⚠️ Критически долгое хранение! Заказ ожидает выдачи более 30 дней.` 
+                          : `⚠️ Заказ ожидает выдачи более 14 дней. Рекомендуется связаться с клиентом.`}
+                      </span>
+                    </div>
                   )}
                 </div>
-                
-                {/* Предупреждение о длительном хранении */}
-                {storageDays > 14 && (
-                  <div className={`mt-4 pt-3 border-t flex items-center gap-2 text-xs ${storageDays > 30 ? 'text-red-600 dark:text-red-400' : 'text-orange-600 dark:text-orange-400'}`}>
-                    <AlertTriangle className="w-4 h-4" />
-                    <span>
-                      {storageDays > 30 
-                        ? `⚠️ Критически долгое хранение! Заказ ожидает выдачи более 30 дней.` 
-                        : `⚠️ Заказ ожидает выдачи более 14 дней. Рекомендуется связаться с клиентом.`}
-                    </span>
-                  </div>
+              );
+            })}
+          </div>
+          
+          {/* Кнопка загрузки еще */}
+          {hasMore && (
+            <div className="flex justify-center pt-4">
+              <button
+                onClick={loadMoreOrders}
+                disabled={loadingMore}
+                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50"
+              >
+                {loadingMore ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <ChevronRight className="w-4 h-4" />
                 )}
-              </div>
-            );
-          })}
-        </div>
+                Загрузить еще
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
