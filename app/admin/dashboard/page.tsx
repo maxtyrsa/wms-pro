@@ -406,7 +406,12 @@ export default function AdminDashboard() {
                         <Cell key={`cell-${index}`} fill={CARRIER_COLORS[entry.name] || `#${Math.floor(Math.random()*16777215).toString(16)}`} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(value: number) => [`${value} заказов`, 'Количество']} />
+                    <Tooltip 
+                      formatter={(value: any) => {
+                        const numValue = typeof value === 'number' ? value : 0;
+                        return [`${numValue} заказов`, 'Количество'];
+                      }} 
+                    />
                     <Legend verticalAlign="bottom" height={36} />
                   </PieChart>
                 </ResponsiveContainer>
@@ -462,7 +467,10 @@ export default function AdminDashboard() {
                     tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
                   />
                   <Tooltip 
-                    formatter={(value: number) => [`${value.toLocaleString()} ₽`, 'Прибыль']}
+                    formatter={(value: any) => {
+                      const numValue = typeof value === 'number' ? value : 0;
+                      return [`${numValue.toLocaleString()} ₽`, 'Прибыль'];
+                    }}
                     contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}
                   />
                   <Line 
