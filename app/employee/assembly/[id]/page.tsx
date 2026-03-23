@@ -15,7 +15,8 @@ import {
   Truck, 
   Hash,
   Loader2,
-  Home
+  Home,
+  Edit2
 } from 'lucide-react';
 import Link from 'next/link';
 import { showToast } from '@/components/Toast';
@@ -112,15 +113,15 @@ export default function AssemblyPage() {
           status: 'Готов к выдаче'
         });
         showToast('Сборка завершена! Заказ готов к выдаче', 'success');
-        // После завершения сборки для Самовывоза переходим на главную
         router.push('/');
       } else {
         await updateDoc(docRef, {
           time_end: serverTimestamp(),
           status: 'Комплектация'
         });
-        showToast('Сборка завершена! Переход к вводу габаритов', 'success');
-        router.push(`/employee/add_dimensions/${id}`);
+        showToast('Сборка завершена!', 'success');
+        // После завершения сборки переходим на страницу редактирования
+        router.push(`/employee/edit_order/${id}`);
       }
     } catch (err) {
       console.error('Error finishing assembly:', err);
@@ -214,6 +215,17 @@ export default function AssemblyPage() {
               <p className="font-semibold text-slate-900 dark:text-white">{order.quantity}</p>
             </div>
           </div>
+
+          {/* Кнопка редактирования (только если сборка не начата) */}
+          {!isStarted && !isFinished && (
+            <button
+              onClick={() => router.push(`/employee/edit_order/${id}`)}
+              className="w-full mt-2 py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl font-medium transition-colors flex items-center justify-center gap-2"
+            >
+              <Edit2 className="w-4 h-4" />
+              Редактировать заказ
+            </button>
+          )}
         </motion.div>
 
         <div className="flex flex-col items-center justify-center py-12 space-y-4">
