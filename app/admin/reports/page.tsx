@@ -38,15 +38,42 @@ interface Order {
   status: string;
   createdAt: string;
   createdBy: string;
-  time_start?: string;
-  time_end?: string;
-  places_data?: { l: number; w: number; h: number; weight: number }[];
+  time_start?: any;
+  time_end?: any;
+  places_data?: Array<{ d: number; w: number; h: number; weight: number }>;
   totalWeight?: number;
   totalVolume?: number;
   payment_sum?: number;
   delivery_cost?: number;
   profit?: number;
 }
+
+// Функция для получения времени в миллисекундах
+const getTimeMs = (time: any): number => {
+  if (!time) return 0;
+  if (typeof time.toDate === 'function') {
+    return time.toDate().getTime();
+  }
+  if (typeof time === 'string') {
+    return new Date(time).getTime();
+  }
+  if (typeof time === 'number') {
+    return time;
+  }
+  return 0;
+};
+
+// Функция для форматирования времени сборки
+const formatAssemblyTime = (start: any, end: any): string => {
+  if (!start || !end) return '—';
+  const startMs = getTimeMs(start);
+  const endMs = getTimeMs(end);
+  if (startMs === 0 || endMs === 0 || endMs <= startMs) return '—';
+  const diffSeconds = Math.floor((endMs - startMs) / 1000);
+  const minutes = Math.floor(diffSeconds / 60);
+  const seconds = diffSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+};
 
 export default function ReportsPage() {
   const { role, loading: authLoading } = useAuth();
@@ -99,11 +126,11 @@ export default function ReportsPage() {
         { header: 'Кол-во мест', key: 'quantity', width: 12 },
         { header: 'Общий вес (кг)', key: 'totalWeight', width: 15 },
         { header: 'Общий объем (м³)', key: 'totalVolume', width: 15 },
-        { header: 'Время сборки (мин)', key: 'assemblyTime', width: 18 },
+        { header: 'Время сборки', key: 'assemblyTime', width: 15 },
         { header: 'Сумма оплаты (₽)', key: 'paymentSum', width: 15 },
         { header: 'Стоимость доставки (₽)', key: 'deliveryCost', width: 18 },
         { header: 'Прибыль (₽)', key: 'profit', width: 15 },
-        { header: 'Детализация мест', key: 'placesDetail', width: 50 },
+        { header: 'Детализация мест', key: 'placesDetail', width: 60 },
       ];
 
       // Styling header
@@ -116,16 +143,38 @@ export default function ReportsPage() {
 
       // Add rows
       orders.forEach(order => {
-        let assemblyTime = 'N/A';
-        if (order.time_start && order.time_end) {
-          const start = new Date(order.time_start).getTime();
-          const end = new Date(order.time_end).getTime();
-          assemblyTime = Math.round((end - start) / 60000).toString();
+        // Расчет времени сборки
+        const assemblyTime = formatAssemblyTime(order.time_start, order.time_end);
+        
+        // Расчет общего веса и объема из мест, если нет прямых значений
+        let totalWeight = order.totalWeight || 0;
+        let totalVolume = order.totalVolume || 0;
+        let placesDetail = '';
+        
+        if (order.places_data && order.places_data.length > 0) {
+          // Пересчитываем вес и объем из мест
+          let calcWeight = 0;
+          let calcVolume = 0;
+          const placesStrings: string[] = [];
+          
+          order.places_data.forEach((place, i) => {
+            const d = place.d || 0;
+            const w = place.w || 0;
+            const h = place.h || 0;
+            const weight = place.weight || 0;
+            
+            calcWeight += weight;
+            calcVolume += (d * w * h) / 1000000;
+            
+            placesStrings.push(
+              `Место ${i+1}: ${d}×${w}×${h} см, ${weight} кг`
+            );
+          });
+          
+          totalWeight = calcWeight;
+          totalVolume = calcVolume;
+          placesDetail = placesStrings.join(' | ');
         }
-
-        const placesDetail = order.places_data?.map((p, i) => 
-          `Место ${i+1}: ${p.l}x${p.w}x${p.h} см, ${p.weight} кг`
-        ).join(' | ') || '';
 
         worksheet.addRow({
           id: order.id,
@@ -135,12 +184,12 @@ export default function ReportsPage() {
           createdAt: new Date(order.createdAt).toLocaleString(),
           createdBy: order.createdBy,
           quantity: order.quantity,
-          totalWeight: order.totalWeight || 0,
-          totalVolume: order.totalVolume || 0,
+          totalWeight: totalWeight.toFixed(2),
+          totalVolume: totalVolume.toFixed(6),
           assemblyTime,
-          paymentSum: order.payment_sum || 0,
-          deliveryCost: order.delivery_cost || 0,
-          profit: order.profit || 0,
+          paymentSum: order.payment_sum?.toLocaleString() || 0,
+          deliveryCost: order.delivery_cost?.toLocaleString() || 0,
+          profit: order.profit?.toLocaleString() || 0,
           placesDetail
         });
       });
