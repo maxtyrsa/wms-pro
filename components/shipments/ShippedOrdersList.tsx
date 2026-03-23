@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { 
@@ -14,7 +14,8 @@ import { showToast } from '@/components/Toast';
 import { CreateConsolidationModal } from '@/components/consolidation/CreateConsolidationModal';
 
 export function ShippedOrdersList() {
-  const [allOrders, setAllOrders] = useState<any[]>([]);
+  const [orders, setOrders] = useState<any[]>([]);
+  const [filteredOrders, setFilteredOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCarrier, setSelectedCarrier] = useState<string>('all');
@@ -24,29 +25,39 @@ export function ShippedOrdersList() {
     start: format(startOfDay(new Date()), 'yyyy-MM-dd'),
     end: format(endOfDay(new Date()), 'yyyy-MM-dd'),
   });
+  const [stats, setStats] = useState({
+    totalOrders: 0,
+    totalWeight: 0,
+    totalVolume: 0,
+    totalProfit: 0,
+    carriers: {} as Record<string, number>
+  });
 
   useEffect(() => {
     fetchShippedOrders();
   }, []);
 
-  // Упрощенный запрос - загружаем только заказы со статусом "Оформлен" (без дополнительных фильтров)
+  useEffect(() => {
+    applyFilters();
+  }, [orders, searchQuery, selectedCarrier, dateRange]);
+
   const fetchShippedOrders = async () => {
     setLoading(true);
     try {
       console.log('📦 Загрузка заказов со статусом "Оформлен"...');
       
-      // Простой запрос без индекса
+      // Упрощенный запрос - только по статусу
       const q = query(
         collection(db, 'orders'),
-        where('status', '==', 'Оформлен'),
-        orderBy('createdAt', 'desc')
+        where('status', '==', 'Оформлен')
       );
       
       const snapshot = await getDocs(q);
-      console.log(`✅ Найдено заказов со статусом "Оформлен": ${snapshot.docs.length}`);
+      console.log(`✅ Найдено заказов: ${snapshot.docs.length}`);
       
       const data = snapshot.docs.map(doc => {
         const orderData = doc.data();
+        console.log(`   - Заказ ${orderData.orderNumber}: ${orderData.carrier}, статус: ${orderData.status}`);
         return { 
           id: doc.id, 
           ...orderData,
@@ -56,7 +67,15 @@ export function ShippedOrdersList() {
         };
       });
       
-      setAllOrders(data);
+      // Фильтруем "Самовывоз" на клиенте
+      const filteredData = data.filter(order => order.carrier !== 'Самовывоз');
+      console.log(`✅ После фильтрации "Самовывоз": ${filteredData.length} заказов`);
+      
+      // Сортируем на клиенте по дате создания (новые сверху)
+      filteredData.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      
+      setOrders(filteredData);
+      calculateStats(filteredData);
     } catch (error) {
       console.error('❌ Ошибка загрузки заказов:', error);
       showToast('Ошибка при загрузке заказов', 'error');
@@ -65,10 +84,31 @@ export function ShippedOrdersList() {
     }
   };
 
-  // Фильтруем на клиенте
-  const filteredOrders = useMemo(() => {
-    let filtered = allOrders.filter(order => order.carrier !== 'Самовывоз');
-    
+  const calculateStats = (ordersData: any[]) => {
+    const carriers: Record<string, number> = {};
+    let totalWeight = 0;
+    let totalVolume = 0;
+    let totalProfit = 0;
+
+    ordersData.forEach(order => {
+      carriers[order.carrier] = (carriers[order.carrier] || 0) + 1;
+      totalWeight += order.totalWeight || 0;
+      totalVolume += order.totalVolume || 0;
+      totalProfit += order.profit || 0;
+    });
+
+    setStats({
+      totalOrders: ordersData.length,
+      totalWeight,
+      totalVolume,
+      totalProfit,
+      carriers
+    });
+  };
+
+  const applyFilters = () => {
+    let filtered = [...orders];
+
     if (searchQuery.trim()) {
       const queryLower = searchQuery.trim().toLowerCase();
       filtered = filtered.filter(order => 
@@ -88,32 +128,9 @@ export function ShippedOrdersList() {
         return orderDate >= start && orderDate <= end;
       });
     }
-    
-    return filtered;
-  }, [allOrders, searchQuery, selectedCarrier, dateRange]);
 
-  // Статистика
-  const stats = useMemo(() => {
-    const carriers: Record<string, number> = {};
-    let totalWeight = 0;
-    let totalVolume = 0;
-    let totalProfit = 0;
-
-    filteredOrders.forEach(order => {
-      carriers[order.carrier] = (carriers[order.carrier] || 0) + 1;
-      totalWeight += order.totalWeight || 0;
-      totalVolume += order.totalVolume || 0;
-      totalProfit += order.profit || 0;
-    });
-
-    return {
-      totalOrders: filteredOrders.length,
-      totalWeight,
-      totalVolume,
-      totalProfit,
-      carriers
-    };
-  }, [filteredOrders]);
+    setFilteredOrders(filtered);
+  };
 
   const toggleOrderSelection = (orderId: string) => {
     const newSelection = new Set(selectedOrders);
@@ -230,7 +247,7 @@ export function ShippedOrdersList() {
       </div>
 
       {/* Если нет заказов */}
-      {stats.totalOrders === 0 && !loading && (
+      {orders.length === 0 && !loading && (
         <div className="text-center py-12 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800">
           <Package className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
           <p className="text-slate-400 dark:text-slate-500 mb-2">Нет заказов, готовых к отправке</p>
