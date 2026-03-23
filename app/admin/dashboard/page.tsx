@@ -50,7 +50,7 @@ interface Order {
   id: string;
   status: string;
   createdAt: string;
-  time_start?: any; // может быть Timestamp или строка
+  time_start?: any;
   time_end?: any;
   totalWeight?: number;
   totalVolume?: number;
@@ -76,18 +76,14 @@ const CARRIER_COLORS: Record<string, string> = {
   'WB_FBO': '#c084fc',
 };
 
-// Функция для получения времени в миллисекундах из Timestamp или строки
 const getTimeMs = (time: any): number => {
   if (!time) return 0;
-  // Если это Timestamp из Firebase (есть метод toDate)
   if (typeof time.toDate === 'function') {
     return time.toDate().getTime();
   }
-  // Если это строка
   if (typeof time === 'string') {
     return new Date(time).getTime();
   }
-  // Если это число (миллисекунды)
   if (typeof time === 'number') {
     return time;
   }
@@ -130,7 +126,6 @@ export default function AdminDashboard() {
     fetchOrders();
   }, [role]);
 
-  // Фильтрация заказов по дате
   const filteredOrders = useMemo(() => {
     if (!dateFilter.start || !dateFilter.end) return orders;
     
@@ -143,7 +138,6 @@ export default function AdminDashboard() {
     });
   }, [orders, dateFilter]);
 
-  // Статистика
   const stats = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -162,7 +156,6 @@ export default function AdminDashboard() {
       if (o.totalWeight) totalWeight += Number(o.totalWeight) || 0;
       if (o.totalVolume) totalVolume += Number(o.totalVolume) || 0;
       
-      // Расчет времени сборки с правильной обработкой Timestamp
       if (o.time_start && o.time_end) {
         const startMs = getTimeMs(o.time_start);
         const endMs = getTimeMs(o.time_end);
@@ -197,7 +190,6 @@ export default function AdminDashboard() {
     };
   }, [filteredOrders]);
 
-  // График заказов по дням недели
   const weeklyChartData = useMemo(() => {
     const dayNames = ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС'];
     const dayCounts = [0, 0, 0, 0, 0, 0, 0];
@@ -212,7 +204,6 @@ export default function AdminDashboard() {
     return dayNames.map((name, i) => ({ name, заказы: dayCounts[i] }));
   }, [filteredOrders]);
 
-  // Динамика заказов по дням
   const dailyOrdersData = useMemo(() => {
     const start = startOfDay(new Date(dateFilter.start));
     const end = endOfDay(new Date(dateFilter.end));
@@ -233,7 +224,6 @@ export default function AdminDashboard() {
     });
   }, [filteredOrders, dateFilter]);
 
-  // Динамика прибыли по дням
   const dailyProfitData = useMemo(() => {
     const start = startOfDay(new Date(dateFilter.start));
     const end = endOfDay(new Date(dateFilter.end));
@@ -257,7 +247,6 @@ export default function AdminDashboard() {
     });
   }, [filteredOrders, dateFilter]);
 
-  // Заказы по транспортным компаниям
   const carrierChartData = useMemo(() => {
     const carrierStats: Record<string, number> = {};
     
@@ -273,7 +262,6 @@ export default function AdminDashboard() {
       .slice(0, 8);
   }, [filteredOrders]);
 
-  // Топ сотрудников (с правильным расчетом среднего времени)
   const topEmployees = useMemo(() => {
     const employeeStats: Record<string, { count: number; totalTimeMs: number; assembled: number }> = {};
     
@@ -284,7 +272,6 @@ export default function AdminDashboard() {
       }
       employeeStats[createdBy].count++;
       
-      // Расчет времени сборки для сотрудника
       if (o.time_start && o.time_end) {
         const startMs = getTimeMs(o.time_start);
         const endMs = getTimeMs(o.time_end);
@@ -299,7 +286,6 @@ export default function AdminDashboard() {
       .map(([email, s]) => ({
         name: email.split('@')[0],
         orders: s.count,
-        // Среднее время в минутах
         avgTime: s.assembled > 0 ? Math.round(s.totalTimeMs / s.assembled / 60000) : 0
       }))
       .sort((a, b) => b.orders - a.orders)
@@ -352,59 +338,19 @@ export default function AdminDashboard() {
           </div>
         </header>
 
-        {/* Stats Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          <StatCard 
-            title="Заказов за период" 
-            value={stats.totalCount} 
-            icon={<Package className="w-6 h-6" />} 
-            color="blue"
-            subtitle={`${stats.todayCount} сегодня`}
-          />
-          <StatCard 
-            title="Ср. время сборки" 
-            value={stats.avgTime} 
-            icon={<Clock className="w-6 h-6" />} 
-            color="emerald"
-            subtitle={`${stats.assembledCount} заказов с временем`}
-          />
-          <StatCard 
-            title="Общий вес" 
-            value={`${stats.weight} кг`} 
-            icon={<Weight className="w-6 h-6" />} 
-            color="orange"
-          />
-          <StatCard 
-            title="Общий объем" 
-            value={`${stats.volume} м³`} 
-            icon={<Layers className="w-6 h-6" />} 
-            color="violet"
-          />
+          <StatCard title="Заказов за период" value={stats.totalCount} icon={<Package className="w-6 h-6" />} color="blue" subtitle={`${stats.todayCount} сегодня`} />
+          <StatCard title="Ср. время сборки" value={stats.avgTime} icon={<Clock className="w-6 h-6" />} color="emerald" subtitle={`${stats.assembledCount} заказов с временем`} />
+          <StatCard title="Общий вес" value={`${stats.weight} кг`} icon={<Weight className="w-6 h-6" />} color="orange" />
+          <StatCard title="Общий объем" value={`${stats.volume} м³`} icon={<Layers className="w-6 h-6" />} color="violet" />
         </div>
 
-        {/* Финансовые показатели */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-          <StatCard 
-            title="Сумма оплат" 
-            value={`${stats.totalPayment.toLocaleString()} ₽`} 
-            icon={<Package className="w-6 h-6" />} 
-            color="blue"
-          />
-          <StatCard 
-            title="Стоимость доставки" 
-            value={`${stats.totalDelivery.toLocaleString()} ₽`} 
-            icon={<Truck className="w-6 h-6" />} 
-            color="orange"
-          />
-          <StatCard 
-            title="Чистая прибыль" 
-            value={`${stats.totalProfit.toLocaleString()} ₽`} 
-            icon={<TrendingUp className="w-6 h-6" />} 
-            color="emerald"
-          />
+          <StatCard title="Сумма оплат" value={`${stats.totalPayment.toLocaleString()} ₽`} icon={<Package className="w-6 h-6" />} color="blue" />
+          <StatCard title="Стоимость доставки" value={`${stats.totalDelivery.toLocaleString()} ₽`} icon={<Truck className="w-6 h-6" />} color="orange" />
+          <StatCard title="Чистая прибыль" value={`${stats.totalProfit.toLocaleString()} ₽`} icon={<TrendingUp className="w-6 h-6" />} color="emerald" />
         </div>
 
-        {/* Графики: Заказы по дням недели + Заказы по ТК */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
             <div className="flex items-center justify-between mb-8">
@@ -448,7 +394,10 @@ export default function AdminDashboard() {
                       cx="50%"
                       cy="50%"
                       labelLine={false}
-                      label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                      label={({ name, percent }) => {
+                        const pct = percent || 0;
+                        return `${name} (${(pct * 100).toFixed(0)}%)`;
+                      }}
                       outerRadius={100}
                       fill="#8884d8"
                       dataKey="value"
@@ -470,7 +419,6 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {/* Графики: Динамика заказов и Динамика прибыли */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
             <div className="flex items-center justify-between mb-8">
@@ -531,7 +479,6 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {/* Эффективность сотрудников */}
         <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
           <div className="flex items-center justify-between mb-8">
             <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
