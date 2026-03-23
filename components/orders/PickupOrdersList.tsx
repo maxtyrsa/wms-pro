@@ -2,10 +2,10 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, orderBy, updateDoc, doc } from 'firebase/firestore';
+import { collection, query, where, orderBy, getDocs, updateDoc, doc } from 'firebase/firestore';
 import { format, differenceInDays } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { Package, Search, XCircle, CheckCircle2, Loader2, AlertTriangle, Clock, User, Calendar, Handshake, ChevronRight } from 'lucide-react';
+import { Package, Search, XCircle, CheckCircle2, Loader2, AlertTriangle, Clock, User, Calendar, Handshake } from 'lucide-react';
 import { showToast } from '@/components/Toast';
 
 interface PickupOrder {
@@ -23,7 +23,7 @@ interface PickupOrdersListProps {
 }
 
 export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
-  const [allOrders, setAllOrders] = useState<PickupOrder[]>([]);
+  const [orders, setOrders] = useState<PickupOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
@@ -32,32 +32,29 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
     fetchPickupOrders();
   }, []);
 
-  // Упрощенный запрос - загружаем заказы со статусом "Готов к выдаче" (без фильтра по ТК)
   const fetchPickupOrders = async () => {
     setLoading(true);
     try {
-      console.log('📦 Загрузка заказов со статусом "Готов к выдаче"...');
+      console.log('📦 Загрузка заказов Самовывоз со статусом "Готов к выдаче"...');
       
-      // Простой запрос без индекса
+      // Упрощенный запрос - только по статусу
       const q = query(
         collection(db, 'orders'),
-        where('status', '==', 'Готов к выдаче'),
-        orderBy('createdAt', 'desc')
+        where('status', '==', 'Готов к выдаче')
       );
       
       const snapshot = await getDocs(q);
-      console.log(`✅ Найдено заказов со статусом "Готов к выдаче": ${snapshot.docs.length}`);
-      
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PickupOrder));
+      console.log(`✅ Найдено заказов: ${snapshot.docs.length}`);
       
       // Фильтруем "Самовывоз" на клиенте
-      const filteredData = data.filter(order => order.carrier === 'Самовывоз');
+      const allOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PickupOrder));
+      const filteredData = allOrders.filter(order => order.carrier === 'Самовывоз');
       console.log(`✅ После фильтрации "Самовывоз": ${filteredData.length} заказов`);
       
-      // Сортируем на клиенте по дате (новые сверху)
+      // Сортируем на клиенте по дате создания (новые сверху)
       filteredData.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       
-      setAllOrders(filteredData);
+      setOrders(filteredData);
     } catch (error) {
       console.error('Error fetching pickup orders:', error);
       showToast('Ошибка при загрузке заказов', 'error');
@@ -106,12 +103,12 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
   };
 
   const filteredOrders = useMemo(() => {
-    if (!searchQuery.trim()) return allOrders;
+    if (!searchQuery.trim()) return orders;
     const queryLower = searchQuery.trim().toLowerCase();
-    return allOrders.filter(order => 
+    return orders.filter(order => 
       order.orderNumber?.toLowerCase().includes(queryLower)
     );
-  }, [allOrders, searchQuery]);
+  }, [orders, searchQuery]);
 
   const clearSearch = () => setSearchQuery('');
 
