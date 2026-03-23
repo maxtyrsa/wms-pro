@@ -2,10 +2,10 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, where, orderBy, getDocs, updateDoc, doc } from 'firebase/firestore';
+import { collection, query, where, getDocs, updateDoc, doc, orderBy } from 'firebase/firestore';
 import { format, differenceInDays } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { Package, Search, XCircle, CheckCircle2, Loader2, AlertTriangle, Clock, User, Calendar, Handshake } from 'lucide-react';
+import { Package, Search, XCircle, Loader2, AlertTriangle, Clock, User, Calendar, Handshake } from 'lucide-react';
 import { showToast } from '@/components/Toast';
 
 interface PickupOrder {
@@ -23,7 +23,7 @@ interface PickupOrdersListProps {
 }
 
 export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
-  const [orders, setOrders] = useState<PickupOrder[]>([]);
+  const [allOrders, setAllOrders] = useState<PickupOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
@@ -35,26 +35,17 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
   const fetchPickupOrders = async () => {
     setLoading(true);
     try {
-      console.log('📦 Загрузка заказов Самовывоз со статусом "Готов к выдаче"...');
-      
-      // Упрощенный запрос - только по статусу
       const q = query(
         collection(db, 'orders'),
-        where('status', '==', 'Готов к выдаче')
+        where('status', '==', 'Готов к выдаче'),
+        orderBy('createdAt', 'desc')
       );
       
       const snapshot = await getDocs(q);
-      console.log(`✅ Найдено заказов: ${snapshot.docs.length}`);
-      
-      // Фильтруем "Самовывоз" на клиенте
-      const allOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PickupOrder));
-      const filteredData = allOrders.filter(order => order.carrier === 'Самовывоз');
-      console.log(`✅ После фильтрации "Самовывоз": ${filteredData.length} заказов`);
-      
-      // Сортируем на клиенте по дате создания (новые сверху)
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PickupOrder));
+      const filteredData = data.filter(order => order.carrier === 'Самовывоз');
       filteredData.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      
-      setOrders(filteredData);
+      setAllOrders(filteredData);
     } catch (error) {
       console.error('Error fetching pickup orders:', error);
       showToast('Ошибка при загрузке заказов', 'error');
@@ -103,12 +94,12 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
   };
 
   const filteredOrders = useMemo(() => {
-    if (!searchQuery.trim()) return orders;
+    if (!searchQuery.trim()) return allOrders;
     const queryLower = searchQuery.trim().toLowerCase();
-    return orders.filter(order => 
+    return allOrders.filter(order => 
       order.orderNumber?.toLowerCase().includes(queryLower)
     );
-  }, [orders, searchQuery]);
+  }, [allOrders, searchQuery]);
 
   const clearSearch = () => setSearchQuery('');
 
@@ -210,21 +201,19 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
                     </div>
                   </div>
                   
-                  {/* Кнопка выдачи (только для администратора) */}
-                  {isAdmin && (
-                    <button
-                      onClick={() => handleMarkAsIssued(order.id)}
-                      disabled={updatingOrderId === order.id}
-                      className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2 whitespace-nowrap self-center"
-                    >
-                      {updatingOrderId === order.id ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Handshake className="w-4 h-4" />
-                      )}
-                      Выдать клиенту
-                    </button>
-                  )}
+                  {/* Кнопка выдачи (для всех - и сотрудника, и администратора) */}
+                  <button
+                    onClick={() => handleMarkAsIssued(order.id)}
+                    disabled={updatingOrderId === order.id}
+                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2 whitespace-nowrap self-center"
+                  >
+                    {updatingOrderId === order.id ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Handshake className="w-4 h-4" />
+                    )}
+                    Выдать клиенту
+                  </button>
                 </div>
                 
                 {/* Предупреждение о длительном хранении */}
