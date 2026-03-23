@@ -1,81 +1,83 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { 
   Package, Search, XCircle, Truck, 
   CheckCircle2, Loader2, BarChart3,
-  TrendingUp, Layers
+  TrendingUp, Layers, Calendar, Filter
 } from 'lucide-react';
 import { showToast } from '@/components/Toast';
 import { CreateConsolidationModal } from '@/components/consolidation/CreateConsolidationModal';
 
+interface Order {
+  id: string;
+  orderNumber?: string;
+  carrier: string;
+  status: string;
+  createdAt: string;
+  createdBy: string;
+  totalWeight?: number;
+  totalVolume?: number;
+  profit?: number;
+  quantity?: number;
+  payment_sum?: number;
+}
+
 export function ShippedOrdersList() {
-  const [orders, setOrders] = useState<any[]>([]);
-  const [filteredOrders, setFilteredOrders] = useState<any[]>([]);
+  const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCarrier, setSelectedCarrier] = useState<string>('all');
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [dateRange, setDateRange] = useState<{ start: string; end: string }>({
+  
+  // Фильтр по дате
+  const [dateFilter, setDateFilter] = useState<{ start: string; end: string }>({
     start: format(startOfDay(new Date()), 'yyyy-MM-dd'),
     end: format(endOfDay(new Date()), 'yyyy-MM-dd'),
   });
-  const [stats, setStats] = useState({
-    totalOrders: 0,
-    totalWeight: 0,
-    totalVolume: 0,
-    totalProfit: 0,
-    carriers: {} as Record<string, number>
-  });
+  const [showDateFilter, setShowDateFilter] = useState(false);
 
   useEffect(() => {
     fetchShippedOrders();
   }, []);
-
-  useEffect(() => {
-    applyFilters();
-  }, [orders, searchQuery, selectedCarrier, dateRange]);
 
   const fetchShippedOrders = async () => {
     setLoading(true);
     try {
       console.log('📦 Загрузка заказов со статусом "Оформлен"...');
       
-      // Упрощенный запрос - только по статусу
       const q = query(
         collection(db, 'orders'),
-        where('status', '==', 'Оформлен')
+        where('status', '==', 'Оформлен'),
+        orderBy('createdAt', 'desc')
       );
       
       const snapshot = await getDocs(q);
-      console.log(`✅ Найдено заказов: ${snapshot.docs.length}`);
+      console.log(`✅ Найдено заказов со статусом "Оформлен": ${snapshot.docs.length}`);
       
       const data = snapshot.docs.map(doc => {
         const orderData = doc.data();
-        console.log(`   - Заказ ${orderData.orderNumber}: ${orderData.carrier}, статус: ${orderData.status}`);
         return { 
           id: doc.id, 
-          ...orderData,
+          orderNumber: orderData.orderNumber,
+          carrier: orderData.carrier,
+          status: orderData.status,
+          createdAt: orderData.createdAt,
+          createdBy: orderData.createdBy,
+          totalWeight: orderData.totalWeight,
+          totalVolume: orderData.totalVolume,
+          profit: orderData.profit,
           quantity: orderData.quantity || 1,
-          payment_sum: orderData.payment_sum || 0,
-          profit: orderData.profit || 0
-        };
+          payment_sum: orderData.payment_sum || 0
+        } as Order;
       });
       
-      // Фильтруем "Самовывоз" на клиенте
-      const filteredData = data.filter(order => order.carrier !== 'Самовывоз');
-      console.log(`✅ После фильтрации "Самовывоз": ${filteredData.length} заказов`);
-      
-      // Сортируем на клиенте по дате создания (новые сверху)
-      filteredData.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      
-      setOrders(filteredData);
-      calculateStats(filteredData);
+      setAllOrders(data);
     } catch (error) {
       console.error('❌ Ошибка загрузки заказов:', error);
       showToast('Ошибка при загрузке заказов', 'error');
@@ -84,31 +86,11 @@ export function ShippedOrdersList() {
     }
   };
 
-  const calculateStats = (ordersData: any[]) => {
-    const carriers: Record<string, number> = {};
-    let totalWeight = 0;
-    let totalVolume = 0;
-    let totalProfit = 0;
-
-    ordersData.forEach(order => {
-      carriers[order.carrier] = (carriers[order.carrier] || 0) + 1;
-      totalWeight += order.totalWeight || 0;
-      totalVolume += order.totalVolume || 0;
-      totalProfit += order.profit || 0;
-    });
-
-    setStats({
-      totalOrders: ordersData.length,
-      totalWeight,
-      totalVolume,
-      totalProfit,
-      carriers
-    });
-  };
-
-  const applyFilters = () => {
-    let filtered = [...orders];
-
+  // Фильтруем на клиенте
+  const filteredOrders = useMemo(() => {
+    let filtered = allOrders.filter(order => order.carrier !== 'Самовывоз');
+    
+    // Поиск по номеру
     if (searchQuery.trim()) {
       const queryLower = searchQuery.trim().toLowerCase();
       filtered = filtered.filter(order => 
@@ -116,21 +98,46 @@ export function ShippedOrdersList() {
       );
     }
 
+    // Фильтр по ТК
     if (selectedCarrier !== 'all') {
       filtered = filtered.filter(order => order.carrier === selectedCarrier);
     }
 
-    if (dateRange.start && dateRange.end) {
-      const start = startOfDay(new Date(dateRange.start));
-      const end = endOfDay(new Date(dateRange.end));
+    // Фильтр по дате
+    if (dateFilter.start && dateFilter.end) {
+      const start = startOfDay(new Date(dateFilter.start));
+      const end = endOfDay(new Date(dateFilter.end));
       filtered = filtered.filter(order => {
         const orderDate = new Date(order.createdAt);
         return orderDate >= start && orderDate <= end;
       });
     }
+    
+    return filtered;
+  }, [allOrders, searchQuery, selectedCarrier, dateFilter]);
 
-    setFilteredOrders(filtered);
-  };
+  // Статистика
+  const stats = useMemo(() => {
+    const carriers: Record<string, number> = {};
+    let totalWeight = 0;
+    let totalVolume = 0;
+    let totalProfit = 0;
+
+    filteredOrders.forEach(order => {
+      carriers[order.carrier] = (carriers[order.carrier] || 0) + 1;
+      totalWeight += order.totalWeight || 0;
+      totalVolume += order.totalVolume || 0;
+      totalProfit += order.profit || 0;
+    });
+
+    return {
+      totalOrders: filteredOrders.length,
+      totalWeight,
+      totalVolume,
+      totalProfit,
+      carriers
+    };
+  }, [filteredOrders]);
 
   const toggleOrderSelection = (orderId: string) => {
     const newSelection = new Set(selectedOrders);
@@ -167,6 +174,12 @@ export function ShippedOrdersList() {
   };
 
   const clearSearch = () => setSearchQuery('');
+  const resetDateFilter = () => {
+    setDateFilter({
+      start: format(startOfDay(new Date()), 'yyyy-MM-dd'),
+      end: format(endOfDay(new Date()), 'yyyy-MM-dd'),
+    });
+  };
 
   const getCarrierColor = (carrier: string) => {
     const colors: Record<string, string> = {
@@ -202,7 +215,8 @@ export function ShippedOrdersList() {
 
       {/* Фильтры */}
       <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {/* Поиск по номеру */}
           <div className="relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <input
@@ -218,6 +232,8 @@ export function ShippedOrdersList() {
               </button>
             )}
           </div>
+
+          {/* Фильтр по ТК */}
           <select
             value={selectedCarrier}
             onChange={(e) => setSelectedCarrier(e.target.value)}
@@ -228,26 +244,71 @@ export function ShippedOrdersList() {
               <option key={carrier} value={carrier}>{carrier}</option>
             ))}
           </select>
-          <div className="flex gap-2">
-            <input
-              type="date"
-              value={dateRange.start}
-              onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
-              className="flex-1 px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
-            />
-            <span className="self-center text-slate-400">—</span>
-            <input
-              type="date"
-              value={dateRange.end}
-              onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
-              className="flex-1 px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
-            />
+
+          {/* Фильтр по дате */}
+          <div className="relative">
+            <button
+              onClick={() => setShowDateFilter(!showDateFilter)}
+              className="w-full px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none flex items-center justify-between"
+            >
+              <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-slate-400" />
+                <span className="text-sm text-slate-600 dark:text-slate-300">
+                  {dateFilter.start === dateFilter.end 
+                    ? format(new Date(dateFilter.start), 'dd.MM.yyyy')
+                    : `${format(new Date(dateFilter.start), 'dd.MM')} - ${format(new Date(dateFilter.end), 'dd.MM')}`}
+                </span>
+              </div>
+              <Filter className="w-4 h-4 text-slate-400" />
+            </button>
+            
+            {showDateFilter && (
+              <div className="absolute top-full left-0 mt-2 z-10 bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 p-4 w-full min-w-[280px]">
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">От даты</label>
+                    <input
+                      type="date"
+                      value={dateFilter.start}
+                      onChange={(e) => setDateFilter({ ...dateFilter, start: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">До даты</label>
+                    <input
+                      type="date"
+                      value={dateFilter.end}
+                      onChange={(e) => setDateFilter({ ...dateFilter, end: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                    />
+                  </div>
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      onClick={resetDateFilter}
+                      className="flex-1 px-3 py-2 text-sm text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                    >
+                      Сбросить
+                    </button>
+                    <button
+                      onClick={() => setShowDateFilter(false)}
+                      className="flex-1 px-3 py-2 text-sm bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors"
+                    >
+                      Применить
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
+
+          {/* Пустой блок для выравнивания */}
+          <div></div>
         </div>
       </div>
 
       {/* Если нет заказов */}
-      {orders.length === 0 && !loading && (
+      {stats.totalOrders === 0 && !loading && (
         <div className="text-center py-12 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800">
           <Package className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
           <p className="text-slate-400 dark:text-slate-500 mb-2">Нет заказов, готовых к отправке</p>
@@ -342,6 +403,11 @@ export function ShippedOrdersList() {
                           {order.profit ? `${order.profit.toLocaleString()} ₽` : '—'}
                         </p>
                       </div>
+                    </div>
+                    
+                    {/* Дата создания для информации */}
+                    <div className="mt-2 text-xs text-slate-400">
+                      📅 {format(new Date(order.createdAt), 'dd.MM.yyyy HH:mm')}
                     </div>
                   </div>
                 </div>
