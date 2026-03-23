@@ -42,8 +42,28 @@ export default function OrderDetailsPage() {
   
   const isAdmin = role === 'admin';
 
+  // Функция для расчета общего объема
+  const calculateTotalVolume = (order: OrderData): number => {
+    if (order.totalVolume) return order.totalVolume;
+    if (order.places_data && order.places_data.length > 0) {
+      return order.places_data.reduce((acc, p) => {
+        const v = (Number(p.d || 0) * Number(p.w || 0) * Number(p.h || 0)) / 1000000;
+        return acc + (isNaN(v) ? 0 : v);
+      }, 0);
+    }
+    return 0;
+  };
+
+  // Функция для расчета общего веса
+  const calculateTotalWeight = (order: OrderData): number => {
+    if (order.totalWeight) return order.totalWeight;
+    if (order.places_data && order.places_data.length > 0) {
+      return order.places_data.reduce((acc, p) => acc + (Number(p.weight) || 0), 0);
+    }
+    return 0;
+  };
+
   useEffect(() => {
-    // Проверяем, что id существует
     if (!id) {
       setError('ID заказа не указан');
       setLoading(false);
@@ -149,7 +169,6 @@ export default function OrderDetailsPage() {
         );
       }
       
-      // Информационные сообщения для сотрудников
       if (order.status === 'Ожидает оформления') {
         return (
           <div className="bg-amber-50 border border-amber-200 text-amber-800 p-4 rounded-2xl flex items-center gap-3">
@@ -192,7 +211,7 @@ export default function OrderDetailsPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
         <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
       </div>
     );
@@ -200,8 +219,8 @@ export default function OrderDetailsPage() {
 
   if (error || !order) {
     return (
-      <div className="min-h-screen p-4 bg-slate-50">
-        <div className="bg-red-50 border border-red-100 text-red-700 p-4 rounded-xl">
+      <div className="min-h-screen p-4 bg-slate-50 dark:bg-slate-950">
+        <div className="bg-red-50 dark:bg-red-950/30 border border-red-100 dark:border-red-800 text-red-700 dark:text-red-300 p-4 rounded-xl">
           {error || 'Заказ не найден'}
         </div>
       </div>
@@ -210,42 +229,44 @@ export default function OrderDetailsPage() {
 
   const finalTime = getFinalAssemblyTime();
   const isTimerActive = (order.status === 'В работе' || order.status === 'Комплектация') && order.time_start && !order.time_end;
+  const totalVolume = calculateTotalVolume(order);
+  const totalWeight = calculateTotalWeight(order);
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-20">
-      <header className="bg-white border-b border-slate-200 px-4 py-4 sticky top-0 z-10 flex items-center gap-4">
-        <button onClick={() => router.back()} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-          <ArrowLeft className="w-6 h-6 text-slate-600" />
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 pb-20 transition-colors duration-200">
+      <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 py-4 sticky top-0 z-10 flex items-center gap-4">
+        <button onClick={() => router.back()} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
+          <ArrowLeft className="w-6 h-6 text-slate-600 dark:text-slate-400" />
         </button>
-        <h1 className="text-xl font-bold text-slate-900">Карточка заказа</h1>
+        <h1 className="text-xl font-bold text-slate-900 dark:text-white">Карточка заказа</h1>
       </header>
 
       <main className="max-w-lg mx-auto p-4 space-y-6">
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-6"
+          className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800 space-y-6"
         >
           {/* Header Info */}
           <div className="text-center space-y-2">
-            <p className="text-sm text-slate-500 font-medium uppercase tracking-wider">Заказ №</p>
-            <h2 className="text-4xl font-black text-slate-900">{order.orderNumber || 'Без номера'}</h2>
-            <p className="text-xs text-slate-400">
+            <p className="text-sm text-slate-500 dark:text-slate-400 font-medium uppercase tracking-wider">Заказ №</p>
+            <h2 className="text-4xl font-black text-slate-900 dark:text-white">{order.orderNumber || 'Без номера'}</h2>
+            <p className="text-xs text-slate-400 dark:text-slate-500">
               {order.createdAt && format(new Date(order.createdAt), 'dd MMMM yyyy, HH:mm', { locale: ru })}
             </p>
           </div>
 
           <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl">
-              <div className="flex items-center gap-3 text-slate-700">
+            <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800 rounded-2xl">
+              <div className="flex items-center gap-3 text-slate-700 dark:text-slate-300">
                 <Truck className="w-5 h-5 text-blue-500" />
                 <span className="font-medium">Транспортная компания</span>
               </div>
-              <span className="font-bold text-slate-900">{order.carrier || '—'}</span>
+              <span className="font-bold text-slate-900 dark:text-white">{order.carrier || '—'}</span>
             </div>
 
-            <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl">
-              <div className="flex items-center gap-3 text-slate-700">
+            <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800 rounded-2xl">
+              <div className="flex items-center gap-3 text-slate-700 dark:text-slate-300">
                 <Info className="w-5 h-5 text-purple-500" />
                 <span className="font-medium">Статус</span>
               </div>
@@ -254,29 +275,29 @@ export default function OrderDetailsPage() {
               </span>
             </div>
 
-            <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl">
-              <div className="flex items-center gap-3 text-slate-700">
+            <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800 rounded-2xl">
+              <div className="flex items-center gap-3 text-slate-700 dark:text-slate-300">
                 <Package className="w-5 h-5 text-emerald-500" />
                 <span className="font-medium">Сборщик</span>
               </div>
-              <span className="font-bold text-slate-900">{order.createdBy || 'Система'}</span>
+              <span className="font-bold text-slate-900 dark:text-white">{order.createdBy?.split('@')[0] || order.createdBy || '—'}</span>
             </div>
 
-            <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl">
-              <div className="flex items-center gap-3 text-slate-700">
+            <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800 rounded-2xl">
+              <div className="flex items-center gap-3 text-slate-700 dark:text-slate-300">
                 <Box className="w-5 h-5 text-orange-500" />
                 <span className="font-medium">Количество мест</span>
               </div>
-              <span className="font-bold text-slate-900">{order.quantity || 0}</span>
+              <span className="font-bold text-slate-900 dark:text-white">{order.quantity || 0}</span>
             </div>
 
             {(isTimerActive || finalTime) && (
-              <div className={`flex items-center justify-between p-4 rounded-2xl ${isTimerActive ? 'bg-blue-50' : 'bg-slate-50'}`}>
+              <div className={`flex items-center justify-between p-4 rounded-2xl ${isTimerActive ? 'bg-blue-50 dark:bg-blue-950/30' : 'bg-slate-50 dark:bg-slate-800'}`}>
                 <div className="flex items-center gap-3">
                   <Clock className={`w-5 h-5 ${isTimerActive ? 'text-blue-500' : 'text-slate-500'}`} />
                   <span className="font-medium">Время сборки</span>
                 </div>
-                <span className={`font-mono font-bold text-lg ${isTimerActive ? 'text-blue-600' : 'text-slate-900'}`}>
+                <span className={`font-mono font-bold text-lg ${isTimerActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-900 dark:text-white'}`}>
                   {isTimerActive ? elapsedTime : finalTime}
                 </span>
               </div>
@@ -285,16 +306,16 @@ export default function OrderDetailsPage() {
 
           {/* Places Info */}
           {order.places_data && order.places_data.length > 0 ? (
-            <div className="space-y-3 pt-4 border-t border-slate-100">
-              <h3 className="font-bold text-slate-900 flex items-center gap-2">
+            <div className="space-y-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+              <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <Box className="w-5 h-5 text-slate-400" />
                 Информация о местах
               </h3>
               <div className="space-y-2">
                 {order.places_data.map((place, index) => (
-                  <div key={index} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl text-sm">
-                    <span className="font-medium text-slate-700">Место {index + 1}</span>
-                    <span className="text-slate-600">
+                  <div key={index} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-xl text-sm">
+                    <span className="font-medium text-slate-700 dark:text-slate-300">Место {index + 1}</span>
+                    <span className="text-slate-600 dark:text-slate-400">
                       {place.d || 0}×{place.w || 0}×{place.h || 0} см, {place.weight || 0} кг
                     </span>
                   </div>
@@ -302,59 +323,53 @@ export default function OrderDetailsPage() {
               </div>
 
               <div className="pt-2 space-y-2">
-                <div className="flex justify-between items-center bg-blue-50 p-3 rounded-xl">
-                  <span className="text-blue-800 font-medium flex items-center gap-2">
+                <div className="flex justify-between items-center bg-blue-50 dark:bg-blue-950/30 p-3 rounded-xl">
+                  <span className="text-blue-800 dark:text-blue-300 font-medium flex items-center gap-2">
                     <Weight className="w-4 h-4" />
                     Общий вес:
                   </span>
-                  <span className="text-blue-900 font-bold">
-                    {order.totalWeight?.toFixed(2) || order.places_data.reduce((acc, p) => acc + (p.weight || 0), 0).toFixed(2)} кг
+                  <span className="text-blue-900 dark:text-blue-200 font-bold">
+                    {totalWeight.toFixed(2)} кг
                   </span>
                 </div>
-                <div className="flex justify-between items-center bg-emerald-50 p-3 rounded-xl">
-                  <span className="text-emerald-800 font-medium flex items-center gap-2">
+                <div className="flex justify-between items-center bg-emerald-50 dark:bg-emerald-950/30 p-3 rounded-xl">
+                  <span className="text-emerald-800 dark:text-emerald-300 font-medium flex items-center gap-2">
                     <Package className="w-4 h-4" />
                     Общий объем:
                   </span>
-                  <span className="text-emerald-900 font-bold">
-                    {order.totalVolume?.toFixed(4) || (() => {
-                      const total = order.places_data.reduce((acc, p) => {
-                        const v = (Number(p.d || 0) * Number(p.w || 0) * Number(p.h || 0)) / 1000000;
-                        return acc + (isNaN(v) ? 0 : v);
-                      }, 0);
-                      return total.toFixed(4);
-                    })} м³
+                  <span className="text-emerald-900 dark:text-emerald-200 font-bold">
+                    {totalVolume.toFixed(4)} м³
                   </span>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="pt-4 border-t border-slate-100">
-              <p className="text-slate-500 text-center italic">Габариты не указаны</p>
+            <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
+              <p className="text-slate-500 dark:text-slate-400 text-center italic">Габариты не указаны</p>
             </div>
           )}
 
           {/* Финансовая информация (только для оформленных заказов) */}
           {(order.payment_sum !== undefined && order.payment_sum !== null) || 
            (order.delivery_cost !== undefined && order.delivery_cost !== null) ? (
-            <div className="pt-4 border-t border-slate-100 space-y-2">
-              <h3 className="font-bold text-slate-900">Финансовая информация</h3>
+            <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-2">
+              <h3 className="font-bold text-slate-900 dark:text-white">Финансовая информация</h3>
               {order.payment_sum !== undefined && order.payment_sum !== null && (
-                <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl">
-                  <span className="text-slate-600">Сумма оплаты:</span>
-                  <span className="font-bold text-slate-900">{order.payment_sum.toLocaleString()} ₽</span>
+                <div className="flex justify-between items-center p-3 bg-slate-50 dark:bg-slate-800 rounded-xl">
+                  <span className="text-slate-600 dark:text-slate-400">Сумма оплаты:</span>
+                  <span className="font-bold text-slate-900 dark:text-white">{order.payment_sum.toLocaleString()} ₽</span>
                 </div>
               )}
               {order.delivery_cost !== undefined && order.delivery_cost !== null && (
-                <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl">
-                  <span className="text-slate-600">Стоимость доставки:</span>
-                  <span className="font-bold text-slate-900">{order.delivery_cost.toLocaleString()} ₽</span>
+                <div className="flex justify-between items-center p-3 bg-slate-50 dark:bg-slate-800 rounded-xl">
+                  <span className="text-slate-600 dark:text-slate-400">Стоимость доставки:</span>
+                  <span className="font-bold text-slate-900 dark:text-white">{order.delivery_cost.toLocaleString()} ₽</span>
                 </div>
               )}
               {order.profit !== undefined && order.profit !== null && (
-                <div className="flex justify-between items-center p-3 bg-emerald-50 rounded-xl">
-                  <span className="text-emerald-700 font-medium">Прибыль:</span>
-                  <span className="font-bold text-emerald-800">{order.profit.toLocaleString()} ₽</span>
+                <div className="flex justify-between items-center p-3 bg-emerald-50 dark:bg-emerald-950/30 rounded-xl">
+                  <span className="text-emerald-700 dark:text-emerald-300 font-medium">Прибыль:</span>
+                  <span className="font-bold text-emerald-800 dark:text-emerald-200">{order.profit.toLocaleString()} ₽</span>
                 </div>
               )}
             </div>
