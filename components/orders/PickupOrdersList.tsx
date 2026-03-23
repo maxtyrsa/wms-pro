@@ -35,6 +35,9 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
   const fetchPickupOrders = async () => {
     setLoading(true);
     try {
+      console.log('📦 Загрузка заказов со статусом "Готов к выдаче"...');
+      
+      // Загружаем все заказы со статусом "Готов к выдаче"
       const q = query(
         collection(db, 'orders'),
         where('status', '==', 'Готов к выдаче'),
@@ -42,12 +45,24 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
       );
       
       const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PickupOrder));
+      console.log(`✅ Найдено заказов со статусом "Готов к выдаче": ${snapshot.docs.length}`);
+      
+      const data = snapshot.docs.map(doc => {
+        const orderData = doc.data();
+        console.log(`   - Заказ ${orderData.orderNumber}: ${orderData.carrier}, статус: ${orderData.status}`);
+        return { id: doc.id, ...orderData } as PickupOrder;
+      });
+      
+      // Фильтруем только "Самовывоз"
       const filteredData = data.filter(order => order.carrier === 'Самовывоз');
+      console.log(`✅ После фильтрации "Самовывоз": ${filteredData.length} заказов`);
+      
+      // Сортируем по дате (новые сверху)
       filteredData.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      
       setAllOrders(filteredData);
     } catch (error) {
-      console.error('Error fetching pickup orders:', error);
+      console.error('❌ Ошибка загрузки заказов:', error);
       showToast('Ошибка при загрузке заказов', 'error');
     } finally {
       setLoading(false);
@@ -147,7 +162,8 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
       {filteredOrders.length === 0 ? (
         <div className="text-center py-12 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800">
           <Package className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
-          <p className="text-slate-400 dark:text-slate-500">Нет заказов, готовых к выдаче</p>
+          <p className="text-slate-400 dark:text-slate-500 mb-2">Нет заказов, готовых к выдаче</p>
+          <p className="text-xs text-slate-400">Убедитесь, что есть заказы Самовывоз со статусом "Готов к выдаче"</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -201,7 +217,7 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
                     </div>
                   </div>
                   
-                  {/* Кнопка выдачи (для всех - и сотрудника, и администратора) */}
+                  {/* Кнопка выдачи (для всех) */}
                   <button
                     onClick={() => handleMarkAsIssued(order.id)}
                     disabled={updatingOrderId === order.id}
