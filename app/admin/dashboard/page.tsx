@@ -50,8 +50,8 @@ interface Order {
   id: string;
   status: string;
   createdAt: string;
-  time_start?: string;
-  time_end?: string;
+  time_start?: any; // может быть Timestamp или строка
+  time_end?: any;
   totalWeight?: number;
   totalVolume?: number;
   createdBy: string;
@@ -61,7 +61,6 @@ interface Order {
   carrier: string;
 }
 
-// Цвета для ТК
 const CARRIER_COLORS: Record<string, string> = {
   'CDEK': '#2563eb',
   'DPD': '#f97316',
@@ -75,6 +74,24 @@ const CARRIER_COLORS: Record<string, string> = {
   'AliExpress': '#e11d48',
   'OZON_FBO': '#db2777',
   'WB_FBO': '#c084fc',
+};
+
+// Функция для получения времени в миллисекундах из Timestamp или строки
+const getTimeMs = (time: any): number => {
+  if (!time) return 0;
+  // Если это Timestamp из Firebase (есть метод toDate)
+  if (typeof time.toDate === 'function') {
+    return time.toDate().getTime();
+  }
+  // Если это строка
+  if (typeof time === 'string') {
+    return new Date(time).getTime();
+  }
+  // Если это число (миллисекунды)
+  if (typeof time === 'number') {
+    return time;
+  }
+  return 0;
 };
 
 export default function AdminDashboard() {
@@ -145,11 +162,13 @@ export default function AdminDashboard() {
       if (o.totalWeight) totalWeight += Number(o.totalWeight) || 0;
       if (o.totalVolume) totalVolume += Number(o.totalVolume) || 0;
       
+      // Расчет времени сборки с правильной обработкой Timestamp
       if (o.time_start && o.time_end) {
-        const start = new Date(o.time_start).getTime();
-        const end = new Date(o.time_end).getTime();
-        if (!isNaN(start) && !isNaN(end)) {
-          totalAssemblySeconds += (end - start) / 1000;
+        const startMs = getTimeMs(o.time_start);
+        const endMs = getTimeMs(o.time_end);
+        if (startMs > 0 && endMs > 0 && endMs > startMs) {
+          const seconds = (endMs - startMs) / 1000;
+          totalAssemblySeconds += seconds;
           assembledCount++;
         }
       }
@@ -162,12 +181,13 @@ export default function AdminDashboard() {
     const avgAssemblySeconds = assembledCount > 0 ? Math.round(totalAssemblySeconds / assembledCount) : 0;
     const avgAssemblyMinutes = Math.floor(avgAssemblySeconds / 60);
     const avgAssemblySecondsRemainder = avgAssemblySeconds % 60;
-    const avgAssemblyFormatted = `${avgAssemblyMinutes}:${avgAssemblySecondsRemainder.toString().padStart(2, '0')}`;
+    const avgAssemblyFormatted = `${avgAssemblyMinutes.toString().padStart(2, '0')}:${avgAssemblySecondsRemainder.toString().padStart(2, '0')}`;
 
     return {
       todayCount: ordersToday.length,
       avgTime: avgAssemblyFormatted,
       avgTimeSeconds: avgAssemblySeconds,
+      assembledCount: assembledCount,
       weight: totalWeight.toFixed(1),
       volume: totalVolume.toFixed(4),
       totalCount: filteredOrders.length,
@@ -192,8 +212,8 @@ export default function AdminDashboard() {
     return dayNames.map((name, i) => ({ name, заказы: dayCounts[i] }));
   }, [filteredOrders]);
 
-  // График динамики заказов по дням
-  const dailyChartData = useMemo(() => {
+  // Динамика заказов по дням
+  const dailyOrdersData = useMemo(() => {
     const start = startOfDay(new Date(dateFilter.start));
     const end = endOfDay(new Date(dateFilter.end));
     const days = eachDayOfInterval({ start, end });
@@ -205,7 +225,35 @@ export default function AdminDashboard() {
         const orderDate = new Date(order.createdAt);
         return orderDate >= dayStart && orderDate <= dayEnd;
       }).length;
-      return { date: format(day, 'dd.MM'), orders: count };
+      return { 
+        date: format(day, 'dd.MM'), 
+        orders: count,
+        fullDate: day
+      };
+    });
+  }, [filteredOrders, dateFilter]);
+
+  // Динамика прибыли по дням
+  const dailyProfitData = useMemo(() => {
+    const start = startOfDay(new Date(dateFilter.start));
+    const end = endOfDay(new Date(dateFilter.end));
+    const days = eachDayOfInterval({ start, end });
+    
+    return days.map(day => {
+      const dayStart = startOfDay(day);
+      const dayEnd = endOfDay(day);
+      const totalProfit = filteredOrders
+        .filter(order => {
+          const orderDate = new Date(order.createdAt);
+          return orderDate >= dayStart && orderDate <= dayEnd;
+        })
+        .reduce((sum, order) => sum + (order.profit || 0), 0);
+      
+      return { 
+        date: format(day, 'dd.MM'), 
+        profit: totalProfit,
+        fullDate: day
+      };
     });
   }, [filteredOrders, dateFilter]);
 
@@ -225,38 +273,23 @@ export default function AdminDashboard() {
       .slice(0, 8);
   }, [filteredOrders]);
 
-  // Прибыль по ТК
-  const profitByCarrierData = useMemo(() => {
-    const carrierProfit: Record<string, number> = {};
-    
-    filteredOrders.forEach(order => {
-      if (order.carrier && order.profit && order.profit > 0) {
-        carrierProfit[order.carrier] = (carrierProfit[order.carrier] || 0) + order.profit;
-      }
-    });
-    
-    return Object.entries(carrierProfit)
-      .map(([name, profit]) => ({ name, profit }))
-      .sort((a, b) => b.profit - a.profit)
-      .slice(0, 8);
-  }, [filteredOrders]);
-
-  // Топ сотрудников
+  // Топ сотрудников (с правильным расчетом среднего времени)
   const topEmployees = useMemo(() => {
-    const employeeStats: Record<string, { count: number; totalTime: number; assembled: number }> = {};
+    const employeeStats: Record<string, { count: number; totalTimeMs: number; assembled: number }> = {};
     
     filteredOrders.forEach(o => {
       const createdBy = o.createdBy || 'Unknown';
       if (!employeeStats[createdBy]) {
-        employeeStats[createdBy] = { count: 0, totalTime: 0, assembled: 0 };
+        employeeStats[createdBy] = { count: 0, totalTimeMs: 0, assembled: 0 };
       }
       employeeStats[createdBy].count++;
       
+      // Расчет времени сборки для сотрудника
       if (o.time_start && o.time_end) {
-        const start = new Date(o.time_start).getTime();
-        const end = new Date(o.time_end).getTime();
-        if (!isNaN(start) && !isNaN(end)) {
-          employeeStats[createdBy].totalTime += (end - start);
+        const startMs = getTimeMs(o.time_start);
+        const endMs = getTimeMs(o.time_end);
+        if (startMs > 0 && endMs > 0 && endMs > startMs) {
+          employeeStats[createdBy].totalTimeMs += (endMs - startMs);
           employeeStats[createdBy].assembled++;
         }
       }
@@ -266,7 +299,8 @@ export default function AdminDashboard() {
       .map(([email, s]) => ({
         name: email.split('@')[0],
         orders: s.count,
-        avgTime: s.assembled > 0 ? Math.round(s.totalTime / s.assembled / 60000) : 0
+        // Среднее время в минутах
+        avgTime: s.assembled > 0 ? Math.round(s.totalTimeMs / s.assembled / 60000) : 0
       }))
       .sort((a, b) => b.orders - a.orders)
       .slice(0, 5);
@@ -332,7 +366,7 @@ export default function AdminDashboard() {
             value={stats.avgTime} 
             icon={<Clock className="w-6 h-6" />} 
             color="emerald"
-            subtitle={`${stats.avgTimeSeconds} сек`}
+            subtitle={`${stats.assembledCount} заказов с временем`}
           />
           <StatCard 
             title="Общий вес" 
@@ -370,7 +404,7 @@ export default function AdminDashboard() {
           />
         </div>
 
-        {/* Charts Section */}
+        {/* Графики: Заказы по дням недели + Заказы по ТК */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
             <div className="flex items-center justify-between mb-8">
@@ -398,30 +432,6 @@ export default function AdminDashboard() {
           <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
             <div className="flex items-center justify-between mb-8">
               <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <TrendingUp className="w-5 h-5 text-emerald-600" />
-                Динамика заказов
-              </h2>
-            </div>
-            <div className="h-[300px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={dailyChartData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                  <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }} />
-                  <Area type="monotone" dataKey="orders" stroke="#10b981" strokeWidth={3} fill="#10b981" fillOpacity={0.2} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-
-        {/* Графики по ТК */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Круговая диаграмма: Заказы по ТК */}
-          <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
-            <div className="flex items-center justify-between mb-8">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <Truck className="w-5 h-5 text-blue-600" />
                 Заказы по ТК
               </h2>
@@ -429,7 +439,7 @@ export default function AdminDashboard() {
                 Всего: {stats.totalCount}
               </span>
             </div>
-            <div className="h-[350px] w-full">
+            <div className="h-[300px] w-full">
               {carrierChartData.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
@@ -439,7 +449,7 @@ export default function AdminDashboard() {
                       cy="50%"
                       labelLine={false}
                       label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
-                      outerRadius={120}
+                      outerRadius={100}
                       fill="#8884d8"
                       dataKey="value"
                     >
@@ -458,57 +468,65 @@ export default function AdminDashboard() {
               )}
             </div>
           </div>
+        </div>
 
-          {/* Столбчатая диаграмма: Прибыль по ТК (исправленная) */}
+        {/* Графики: Динамика заказов и Динамика прибыли */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
             <div className="flex items-center justify-between mb-8">
               <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <DollarSign className="w-5 h-5 text-emerald-600" />
-                Прибыль по ТК (₽)
+                <TrendingUp className="w-5 h-5 text-emerald-600" />
+                Динамика заказов
+              </h2>
+            </div>
+            <div className="h-[300px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={dailyOrdersData}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                  <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }} />
+                  <Area type="monotone" dataKey="orders" stroke="#10b981" strokeWidth={3} fill="#10b981" fillOpacity={0.2} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
+            <div className="flex items-center justify-between mb-8">
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <DollarSign className="w-5 h-5 text-blue-600" />
+                Динамика прибыли (₽)
               </h2>
               <span className="text-xs text-slate-400 font-bold uppercase">
                 Всего: {stats.totalProfit.toLocaleString()} ₽
               </span>
             </div>
-            <div className="h-[350px] w-full">
-              {profitByCarrierData.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart 
-                    data={profitByCarrierData} 
-                    layout="vertical" 
-                    margin={{ top: 20, right: 30, left: 100, bottom: 20 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#f1f5f9" />
-                    <XAxis 
-                      type="number" 
-                      tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
-                      tick={{ fontSize: 11 }}
-                    />
-                    <YAxis 
-                      type="category" 
-                      dataKey="name" 
-                      width={90} 
-                      tick={{ fontSize: 11, fill: '#94a3b8' }}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <Tooltip 
-                      formatter={(value) => [`${value.toLocaleString()} ₽`, 'Прибыль']}
-                      contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}
-                    />
-                    <Bar 
-                      dataKey="profit" 
-                      fill="#10b981" 
-                      radius={[0, 8, 8, 0]}
-                      barSize={32}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="flex items-center justify-center h-full text-slate-400">
-                  Нет данных о прибыли за выбранный период
-                </div>
-              )}
+            <div className="h-[300px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={dailyProfitData}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
+                  <YAxis 
+                    axisLine={false} 
+                    tickLine={false} 
+                    tick={{ fill: '#94a3b8', fontSize: 12 }}
+                    tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
+                  />
+                  <Tooltip 
+                    formatter={(value) => [`${value.toLocaleString()} ₽`, 'Прибыль']}
+                    contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="profit" 
+                    stroke="#2563eb" 
+                    strokeWidth={3} 
+                    dot={{ r: 4, fill: '#2563eb', strokeWidth: 2, stroke: '#fff' }}
+                    activeDot={{ r: 6 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           </div>
         </div>
@@ -523,18 +541,24 @@ export default function AdminDashboard() {
             <span className="text-xs text-slate-400 font-bold uppercase">Топ 5</span>
           </div>
           <div className="h-[300px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={topEmployees}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
-                <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }} />
-                <Legend verticalAlign="top" align="right" height={36} iconType="circle" />
-                <Bar yAxisId="left" dataKey="orders" name="Заказов" fill="#2563eb" radius={[4, 4, 0, 0]} barSize={24} />
-                <Bar yAxisId="right" dataKey="avgTime" name="Ср. время (мин)" fill="#10b981" radius={[4, 4, 0, 0]} barSize={24} />
-              </BarChart>
-            </ResponsiveContainer>
+            {topEmployees.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={topEmployees}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
+                  <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                  <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                  <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }} />
+                  <Legend verticalAlign="top" align="right" height={36} iconType="circle" />
+                  <Bar yAxisId="left" dataKey="orders" name="Заказов" fill="#2563eb" radius={[4, 4, 0, 0]} barSize={24} />
+                  <Bar yAxisId="right" dataKey="avgTime" name="Ср. время (мин)" fill="#10b981" radius={[4, 4, 0, 0]} barSize={24} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-full text-slate-400">
+                Нет данных о сотрудниках
+              </div>
+            )}
           </div>
         </div>
       </div>

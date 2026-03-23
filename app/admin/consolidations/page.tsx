@@ -2,12 +2,12 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Package, Truck, Eye, X, Loader2, Layers, Shield } from 'lucide-react';
+import { ArrowLeft, Package, Truck, Eye, X, Loader2, Layers, Shield, Calendar, Filter } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
 import { collection, query, orderBy, getDocs, updateDoc, doc, writeBatch } from 'firebase/firestore';
-import { format } from 'date-fns';
+import { format, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { showToast } from '@/components/Toast';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
@@ -34,8 +34,17 @@ export default function ConsolidationsPage() {
   const router = useRouter();
   const { role, loading } = useAuth();
   const [consolidations, setConsolidations] = useState<Consolidation[]>([]);
+  const [filteredConsolidations, setFilteredConsolidations] = useState<Consolidation[]>([]);
   const [loadingData, setLoadingData] = useState(true);
   const [selectedConsolidation, setSelectedConsolidation] = useState<Consolidation | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  
+  // Фильтр по дате
+  const [dateFilter, setDateFilter] = useState<{ start: string; end: string }>({
+    start: format(startOfDay(new Date()), 'yyyy-MM-dd'),
+    end: format(endOfDay(new Date()), 'yyyy-MM-dd'),
+  });
+  const [showDateFilter, setShowDateFilter] = useState(false);
 
   useEffect(() => {
     if (loading) return;
@@ -45,6 +54,10 @@ export default function ConsolidationsPage() {
     }
     fetchConsolidations();
   }, [role, loading]);
+
+  useEffect(() => {
+    applyFilters();
+  }, [consolidations, searchQuery, dateFilter]);
 
   const fetchConsolidations = async () => {
     try {
@@ -58,6 +71,30 @@ export default function ConsolidationsPage() {
     } finally {
       setLoadingData(false);
     }
+  };
+
+  const applyFilters = () => {
+    let filtered = [...consolidations];
+    
+    // Поиск по номеру консоли
+    if (searchQuery.trim()) {
+      const queryLower = searchQuery.trim().toLowerCase();
+      filtered = filtered.filter(cons => 
+        cons.consolidationNumber?.toLowerCase().includes(queryLower)
+      );
+    }
+    
+    // Фильтр по дате создания
+    if (dateFilter.start && dateFilter.end) {
+      const start = startOfDay(new Date(dateFilter.start));
+      const end = endOfDay(new Date(dateFilter.end));
+      filtered = filtered.filter(cons => {
+        const consDate = new Date(cons.createdAt);
+        return isWithinInterval(consDate, { start, end });
+      });
+    }
+    
+    setFilteredConsolidations(filtered);
   };
 
   const handleMarkAsShipped = async (consolidation: Consolidation) => {
@@ -85,6 +122,13 @@ export default function ConsolidationsPage() {
     }
   };
 
+  const resetDateFilter = () => {
+    setDateFilter({
+      start: format(startOfDay(new Date()), 'yyyy-MM-dd'),
+      end: format(endOfDay(new Date()), 'yyyy-MM-dd'),
+    });
+  };
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'pending':
@@ -97,6 +141,8 @@ export default function ConsolidationsPage() {
         return null;
     }
   };
+
+  const clearSearch = () => setSearchQuery('');
 
   if (loading || loadingData) {
     return (
@@ -131,20 +177,116 @@ export default function ConsolidationsPage() {
       </header>
 
       <main className="max-w-6xl mx-auto p-4">
-        {consolidations.length === 0 ? (
+        {/* Поиск и фильтры */}
+        <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 mb-6 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Поиск по номеру консоли */}
+            <div className="relative">
+              <div className="absolute left-4 top-1/2 -translate-y-1/2">
+                <Package className="w-4 h-4 text-slate-400" />
+              </div>
+              <input
+                type="text"
+                placeholder="Поиск по номеру консоли..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-10 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+              {searchQuery && (
+                <button onClick={clearSearch} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+
+            {/* Фильтр по дате */}
+            <div className="relative">
+              <button
+                onClick={() => setShowDateFilter(!showDateFilter)}
+                className="w-full px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none flex items-center justify-between"
+              >
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-slate-400" />
+                  <span className="text-sm text-slate-600 dark:text-slate-300">
+                    {dateFilter.start === dateFilter.end 
+                      ? format(new Date(dateFilter.start), 'dd.MM.yyyy')
+                      : `${format(new Date(dateFilter.start), 'dd.MM')} - ${format(new Date(dateFilter.end), 'dd.MM')}`}
+                  </span>
+                </div>
+                <Filter className="w-4 h-4 text-slate-400" />
+              </button>
+              
+              {showDateFilter && (
+                <div className="absolute top-full left-0 mt-2 z-10 bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 p-4 w-full min-w-[280px]">
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">От даты</label>
+                      <input
+                        type="date"
+                        value={dateFilter.start}
+                        onChange={(e) => setDateFilter({ ...dateFilter, start: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">До даты</label>
+                      <input
+                        type="date"
+                        value={dateFilter.end}
+                        onChange={(e) => setDateFilter({ ...dateFilter, end: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                      />
+                    </div>
+                    <div className="flex gap-2 pt-2">
+                      <button
+                        onClick={resetDateFilter}
+                        className="flex-1 px-3 py-2 text-sm text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                      >
+                        Сбросить
+                      </button>
+                      <button
+                        onClick={() => setShowDateFilter(false)}
+                        className="flex-1 px-3 py-2 text-sm bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors"
+                      >
+                        Применить
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Пустой блок для выравнивания */}
+            <div></div>
+          </div>
+          
+          {/* Информация о количестве */}
+          <div className="text-xs text-slate-500 dark:text-slate-400">
+            Найдено: <span className="font-bold text-slate-900 dark:text-white">{filteredConsolidations.length}</span> консолей
+            {filteredConsolidations.length !== consolidations.length && (
+              <span className="ml-2 text-blue-500">(отфильтровано из {consolidations.length})</span>
+            )}
+          </div>
+        </div>
+
+        {filteredConsolidations.length === 0 ? (
           <div className="text-center py-12 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800">
             <Package className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
-            <p className="text-slate-400 dark:text-slate-500">Нет созданных консолей</p>
-            <button
-              onClick={() => router.push('/admin/shipments')}
-              className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors"
-            >
-              Создать консоль
-            </button>
+            <p className="text-slate-400 dark:text-slate-500">
+              {consolidations.length === 0 ? 'Нет созданных консолей' : 'Консоли не найдены по выбранным фильтрам'}
+            </p>
+            {consolidations.length === 0 && (
+              <button
+                onClick={() => router.push('/admin/shipments')}
+                className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors"
+              >
+                Создать консоль
+              </button>
+            )}
           </div>
         ) : (
           <div className="space-y-4">
-            {consolidations.map(cons => (
+            {filteredConsolidations.map(cons => (
               <div
                 key={cons.id}
                 className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-md transition-all overflow-hidden"

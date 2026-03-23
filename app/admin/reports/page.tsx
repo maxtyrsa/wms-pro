@@ -24,7 +24,8 @@ import {
   AlertCircle,
   Clock,
   Package,
-  ArrowLeft
+  ArrowLeft,
+  Home
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import Link from 'next/link';
@@ -42,6 +43,9 @@ interface Order {
   places_data?: { l: number; w: number; h: number; weight: number }[];
   totalWeight?: number;
   totalVolume?: number;
+  payment_sum?: number;
+  delivery_cost?: number;
+  profit?: number;
 }
 
 export default function ReportsPage() {
@@ -96,6 +100,9 @@ export default function ReportsPage() {
         { header: 'Общий вес (кг)', key: 'totalWeight', width: 15 },
         { header: 'Общий объем (м³)', key: 'totalVolume', width: 15 },
         { header: 'Время сборки (мин)', key: 'assemblyTime', width: 18 },
+        { header: 'Сумма оплаты (₽)', key: 'paymentSum', width: 15 },
+        { header: 'Стоимость доставки (₽)', key: 'deliveryCost', width: 18 },
+        { header: 'Прибыль (₽)', key: 'profit', width: 15 },
         { header: 'Детализация мест', key: 'placesDetail', width: 50 },
       ];
 
@@ -131,6 +138,9 @@ export default function ReportsPage() {
           totalWeight: order.totalWeight || 0,
           totalVolume: order.totalVolume || 0,
           assemblyTime,
+          paymentSum: order.payment_sum || 0,
+          deliveryCost: order.delivery_cost || 0,
+          profit: order.profit || 0,
           placesDetail
         });
       });
@@ -150,32 +160,37 @@ export default function ReportsPage() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
         <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-4 md:p-8 transition-colors duration-200">
       <div className="max-w-3xl mx-auto">
         <header className="mb-8 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Link href="/admin/dashboard" className="p-2 hover:bg-white rounded-full transition-colors border border-transparent hover:border-slate-200">
-              <ArrowLeft className="w-6 h-6 text-slate-600" />
-            </Link>
+            {/* Кнопка возврата на главную */}
+            <button 
+              onClick={() => router.push('/')}
+              className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-full transition-colors border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+              title="На главную"
+            >
+              <Home className="w-6 h-6 text-slate-600 dark:text-slate-400" />
+            </button>
             <div>
-              <h1 className="text-3xl font-bold text-slate-900">Отчеты</h1>
-              <p className="text-slate-500">Экспорт данных в Excel формат</p>
+              <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Отчеты</h1>
+              <p className="text-slate-500 dark:text-slate-400">Экспорт данных в Excel формат</p>
             </div>
           </div>
-          <FileSpreadsheet className="w-10 h-10 text-emerald-600 opacity-20" />
+          <FileSpreadsheet className="w-10 h-10 text-emerald-600 dark:text-emerald-500 opacity-20" />
         </header>
 
-        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200 space-y-8">
+        <div className="bg-white dark:bg-slate-900 p-8 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 space-y-8">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-400 uppercase ml-1 flex items-center gap-2">
+              <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase ml-1 flex items-center gap-2">
                 <Calendar className="w-3 h-3" />
                 Дата начала
               </label>
@@ -183,11 +198,11 @@ export default function ReportsPage() {
                 type="date" 
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
-                className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                className="w-full p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 font-medium dark:text-white"
               />
             </div>
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-400 uppercase ml-1 flex items-center gap-2">
+              <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase ml-1 flex items-center gap-2">
                 <Calendar className="w-3 h-3" />
                 Дата окончания
               </label>
@@ -195,19 +210,19 @@ export default function ReportsPage() {
                 type="date" 
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
-                className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                className="w-full p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 font-medium dark:text-white"
               />
             </div>
           </div>
 
-          <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 flex items-start gap-4">
-            <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-blue-600 shadow-sm shrink-0">
+          <div className="bg-blue-50 dark:bg-blue-950/30 p-6 rounded-2xl border border-blue-100 dark:border-blue-800 flex items-start gap-4">
+            <div className="w-10 h-10 bg-white dark:bg-slate-800 rounded-xl flex items-center justify-center text-blue-600 dark:text-blue-400 shadow-sm shrink-0">
               <Download className="w-5 h-5" />
             </div>
             <div className="space-y-1">
-              <h3 className="font-bold text-blue-900">XLSX Отчет</h3>
-              <p className="text-sm text-blue-700 leading-relaxed">
-                Файл будет содержать полную информацию о заказах: номера, ТК, габариты каждого места, вес, данные о сотрудниках и времени сборки.
+              <h3 className="font-bold text-blue-900 dark:text-blue-300">XLSX Отчет</h3>
+              <p className="text-sm text-blue-700 dark:text-blue-400 leading-relaxed">
+                Файл будет содержать полную информацию о заказах: номера, ТК, габариты, вес, данные о сотрудниках, времени сборки, а также финансовые показатели (сумма оплаты, доставка, прибыль).
               </p>
             </div>
           </div>
@@ -216,7 +231,7 @@ export default function ReportsPage() {
             <motion.div 
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="p-4 bg-red-50 border border-red-100 rounded-2xl flex items-center gap-3 text-red-700 text-sm"
+              className="p-4 bg-red-50 dark:bg-red-950/30 border border-red-100 dark:border-red-800 rounded-2xl flex items-center gap-3 text-red-700 dark:text-red-300 text-sm"
             >
               <AlertCircle className="w-5 h-5 shrink-0" />
               <p>{error}</p>
@@ -226,7 +241,7 @@ export default function ReportsPage() {
           <button 
             onClick={generateReport}
             disabled={exporting}
-            className="w-full h-16 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-lg shadow-lg shadow-emerald-100 transition-all active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-50"
+            className="w-full h-16 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-lg shadow-lg shadow-emerald-100 dark:shadow-emerald-950/30 transition-all active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-50"
           >
             {exporting ? (
               <Loader2 className="w-6 h-6 animate-spin" />
@@ -240,13 +255,13 @@ export default function ReportsPage() {
         </div>
 
         <div className="mt-12 grid grid-cols-1 sm:grid-cols-2 gap-6 opacity-50 grayscale">
-          <div className="p-6 bg-white rounded-2xl border border-dashed border-slate-300 flex items-center gap-4">
+          <div className="p-6 bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 flex items-center gap-4">
             <Clock className="w-8 h-8 text-slate-400" />
-            <p className="text-sm font-medium text-slate-500">Автоматическая рассылка (скоро)</p>
+            <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Автоматическая рассылка (скоро)</p>
           </div>
-          <div className="p-6 bg-white rounded-2xl border border-dashed border-slate-300 flex items-center gap-4">
+          <div className="p-6 bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 flex items-center gap-4">
             <Package className="w-8 h-8 text-slate-400" />
-            <p className="text-sm font-medium text-slate-500">Интеграция с 1С (скоро)</p>
+            <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Интеграция с 1С (скоро)</p>
           </div>
         </div>
       </div>
