@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, updateDoc, doc, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs, updateDoc, doc } from 'firebase/firestore';
 import { format, differenceInDays } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { Package, Search, XCircle, Loader2, AlertTriangle, Clock, User, Calendar, Handshake } from 'lucide-react';
@@ -35,29 +35,23 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
   const fetchPickupOrders = async () => {
     setLoading(true);
     try {
-      console.log('📦 Загрузка заказов со статусом "Готов к выдаче"...');
+      console.log('📦 Загрузка заказов...');
       
-      // Загружаем все заказы со статусом "Готов к выдаче"
-      const q = query(
-        collection(db, 'orders'),
-        where('status', '==', 'Готов к выдаче'),
-        orderBy('createdAt', 'desc')
-      );
+      // Упрощенный запрос - загружаем все заказы, фильтруем на клиенте
+      const q = query(collection(db, 'orders'));
       
       const snapshot = await getDocs(q);
-      console.log(`✅ Найдено заказов со статусом "Готов к выдаче": ${snapshot.docs.length}`);
+      console.log(`✅ Загружено всего заказов: ${snapshot.docs.length}`);
       
-      const data = snapshot.docs.map(doc => {
-        const orderData = doc.data();
-        console.log(`   - Заказ ${orderData.orderNumber}: ${orderData.carrier}, статус: ${orderData.status}`);
-        return { id: doc.id, ...orderData } as PickupOrder;
-      });
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PickupOrder));
       
-      // Фильтруем только "Самовывоз"
-      const filteredData = data.filter(order => order.carrier === 'Самовывоз');
-      console.log(`✅ После фильтрации "Самовывоз": ${filteredData.length} заказов`);
+      // Фильтруем на клиенте: статус "Готов к выдаче" и ТК "Самовывоз"
+      const filteredData = data.filter(order => 
+        order.status === 'Готов к выдаче' && order.carrier === 'Самовывоз'
+      );
+      console.log(`✅ После фильтрации: ${filteredData.length} заказов Самовывоз со статусом "Готов к выдаче"`);
       
-      // Сортируем по дате (новые сверху)
+      // Сортируем на клиенте по дате (новые сверху)
       filteredData.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       
       setAllOrders(filteredData);
@@ -162,8 +156,7 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
       {filteredOrders.length === 0 ? (
         <div className="text-center py-12 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800">
           <Package className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
-          <p className="text-slate-400 dark:text-slate-500 mb-2">Нет заказов, готовых к выдаче</p>
-          <p className="text-xs text-slate-400">Убедитесь, что есть заказы Самовывоз со статусом "Готов к выдаче"</p>
+          <p className="text-slate-400 dark:text-slate-500">Нет заказов, готовых к выдаче</p>
         </div>
       ) : (
         <div className="space-y-3">
