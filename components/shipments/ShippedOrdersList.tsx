@@ -8,7 +8,7 @@ import { ru } from 'date-fns/locale';
 import { 
   Package, Search, XCircle, Truck, 
   CheckCircle2, Loader2, BarChart3,
-  TrendingUp, Layers, Calendar, Filter
+  TrendingUp, Layers
 } from 'lucide-react';
 import { showToast } from '@/components/Toast';
 import { CreateConsolidationModal } from '@/components/consolidation/CreateConsolidationModal';
@@ -35,12 +35,11 @@ export function ShippedOrdersList() {
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [showCreateModal, setShowCreateModal] = useState(false);
   
-  // Фильтр по дате
-  const [dateFilter, setDateFilter] = useState<{ start: string; end: string }>({
+  // Фильтр по дате (временно убран)
+  const [dateFilter] = useState<{ start: string; end: string }>({
     start: format(startOfDay(new Date()), 'yyyy-MM-dd'),
     end: format(endOfDay(new Date()), 'yyyy-MM-dd'),
   });
-  const [showDateFilter, setShowDateFilter] = useState(false);
 
   useEffect(() => {
     fetchShippedOrders();
@@ -100,6 +99,7 @@ export function ShippedOrdersList() {
       filtered = filtered.filter(order => order.carrier === selectedCarrier);
     }
 
+    // Фильтр по дате (простой)
     if (dateFilter.start && dateFilter.end) {
       const start = startOfDay(new Date(dateFilter.start));
       const end = endOfDay(new Date(dateFilter.end));
@@ -172,12 +172,6 @@ export function ShippedOrdersList() {
   };
 
   const clearSearch = () => setSearchQuery('');
-  const resetDateFilter = () => {
-    setDateFilter({
-      start: format(startOfDay(new Date()), 'yyyy-MM-dd'),
-      end: format(endOfDay(new Date()), 'yyyy-MM-dd'),
-    });
-  };
 
   const getCarrierColor = (carrier: string) => {
     const colors: Record<string, string> = {
@@ -212,9 +206,8 @@ export function ShippedOrdersList() {
       </div>
 
       {/* Фильтры */}
-      <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {/* Поиск по номеру */}
+      <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <input
@@ -231,7 +224,6 @@ export function ShippedOrdersList() {
             )}
           </div>
 
-          {/* Фильтр по ТК */}
           <select
             value={selectedCarrier}
             onChange={(e) => setSelectedCarrier(e.target.value)}
@@ -243,65 +235,9 @@ export function ShippedOrdersList() {
             ))}
           </select>
 
-          {/* Фильтр по дате */}
-          <div className="relative">
-            <button
-              onClick={() => setShowDateFilter(!showDateFilter)}
-              className="w-full px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none flex items-center justify-between"
-            >
-              <div className="flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-slate-400" />
-                <span className="text-sm text-slate-600 dark:text-slate-300">
-                  {dateFilter.start === dateFilter.end 
-                    ? format(new Date(dateFilter.start), 'dd.MM.yyyy')
-                    : `${format(new Date(dateFilter.start), 'dd.MM')} - ${format(new Date(dateFilter.end), 'dd.MM')}`}
-                </span>
-              </div>
-              <Filter className="w-4 h-4 text-slate-400" />
-            </button>
-            
-            {showDateFilter && (
-              <div className="absolute top-full left-0 mt-2 z-10 bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 p-4 w-full min-w-[280px]">
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">От даты</label>
-                    <input
-                      type="date"
-                      value={dateFilter.start}
-                      onChange={(e) => setDateFilter({ ...dateFilter, start: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">До даты</label>
-                    <input
-                      type="date"
-                      value={dateFilter.end}
-                      onChange={(e) => setDateFilter({ ...dateFilter, end: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                    />
-                  </div>
-                  <div className="flex gap-2 pt-2">
-                    <button
-                      onClick={resetDateFilter}
-                      className="flex-1 px-3 py-2 text-sm text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-                    >
-                      Сбросить
-                    </button>
-                    <button
-                      onClick={() => setShowDateFilter(false)}
-                      className="flex-1 px-3 py-2 text-sm bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors"
-                    >
-                      Применить
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
+          <div className="flex items-center justify-center text-xs text-slate-400">
+            📅 {format(new Date(dateFilter.start), 'dd.MM.yyyy')} — {format(new Date(dateFilter.end), 'dd.MM.yyyy')}
           </div>
-
-          {/* Пустой блок для выравнивания */}
-          <div></div>
         </div>
       </div>
 
