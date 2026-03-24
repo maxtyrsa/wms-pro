@@ -6,8 +6,9 @@ import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
 import { motion } from 'motion/react';
-import { ArrowLeft, Package, Truck, Building2, Hash, Loader2, Save } from 'lucide-react';
+import { ArrowLeft, Package, Truck, Building2, Hash, Loader2, Save, Edit2 } from 'lucide-react';
 import { showToast } from '@/components/Toast';
+import { ThemeToggle } from '@/components/ui/ThemeToggle';
 
 const DEPT_CARRIERS: Record<string, string[]> = {
   'KF': ['CDEK', 'DPD', 'Деловые линии', 'Почта России', 'ПЭК', 'Самовывоз'],
@@ -34,6 +35,8 @@ export default function EditOrderPage() {
     department: '',
     carrier: '',
   });
+
+  const isAdmin = role === 'admin';
 
   useEffect(() => {
     if (!id) {
@@ -96,7 +99,7 @@ export default function EditOrderPage() {
 
       showToast('Заказ успешно обновлен', 'success');
       
-      // Перенаправляем на страницу ввода габаритов
+      // После редактирования перенаправляем на страницу ввода габаритов
       router.push(`/employee/add_dimensions/${id}`);
     } catch (err: any) {
       console.error('Error updating order:', err);
@@ -116,14 +119,22 @@ export default function EditOrderPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 pb-20 transition-colors duration-200">
-      <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 py-4 sticky top-0 z-10 flex items-center gap-4">
-        <button onClick={() => router.back()} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
-          <ArrowLeft className="w-6 h-6 text-slate-600 dark:text-slate-400" />
-        </button>
-        <div>
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white">Редактирование заказа</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400">Измените данные перед вводом габаритов</p>
+      <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 py-4 sticky top-0 z-10 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <button onClick={() => router.back()} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
+            <ArrowLeft className="w-6 h-6 text-slate-600 dark:text-slate-400" />
+          </button>
+          <div>
+            <h1 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Edit2 className="w-5 h-5 text-blue-600" />
+              Редактирование заказа
+            </h1>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              {isAdmin ? 'Администратор' : 'Сотрудник'} может изменить данные перед вводом габаритов
+            </p>
+          </div>
         </div>
+        <ThemeToggle />
       </header>
 
       <main className="max-w-lg mx-auto p-4">

@@ -34,7 +34,7 @@ interface OrderData {
 export default function AssemblyPage() {
   const { id } = useParams();
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, role } = useAuth();
   
   const [order, setOrder] = useState<OrderData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -42,6 +42,8 @@ export default function AssemblyPage() {
   const [starting, setStarting] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  
+  const isAdmin = role === 'admin';
 
   useEffect(() => {
     if (!id) return;
@@ -121,6 +123,7 @@ export default function AssemblyPage() {
         });
         showToast('Сборка завершена!', 'success');
         // После завершения сборки переходим на страницу редактирования
+        // для всех пользователей (и сотрудника, и администратора)
         router.push(`/employee/edit_order/${id}`);
       }
     } catch (err) {
