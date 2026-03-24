@@ -51,7 +51,6 @@ export function ShippedOrdersList() {
     try {
       console.log('📦 Загрузка заказов со статусом "Оформлен"...');
       
-      // Упрощенный запрос - без orderBy, только where
       const q = query(
         collection(db, 'orders'),
         where('status', '==', 'Оформлен')
@@ -90,7 +89,6 @@ export function ShippedOrdersList() {
   const filteredOrders = useMemo(() => {
     let filtered = allOrders.filter(order => order.carrier !== 'Самовывоз');
     
-    // Поиск по номеру
     if (searchQuery.trim()) {
       const queryLower = searchQuery.trim().toLowerCase();
       filtered = filtered.filter(order => 
@@ -98,12 +96,10 @@ export function ShippedOrdersList() {
       );
     }
 
-    // Фильтр по ТК
     if (selectedCarrier !== 'all') {
       filtered = filtered.filter(order => order.carrier === selectedCarrier);
     }
 
-    // Фильтр по дате
     if (dateFilter.start && dateFilter.end) {
       const start = startOfDay(new Date(dateFilter.start));
       const end = endOfDay(new Date(dateFilter.end));
@@ -113,7 +109,6 @@ export function ShippedOrdersList() {
       });
     }
     
-    // Сортируем на клиенте по дате (новые сверху)
     filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     
     return filtered;
@@ -408,7 +403,6 @@ export function ShippedOrdersList() {
                       </div>
                     </div>
                     
-                    {/* Дата создания для информации */}
                     <div className="mt-2 text-xs text-slate-400">
                       📅 {format(new Date(order.createdAt), 'dd.MM.yyyy HH:mm')}
                     </div>
