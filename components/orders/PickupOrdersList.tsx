@@ -5,7 +5,7 @@ import { db } from '@/lib/firebase';
 import { collection, query, where, getDocs, updateDoc, doc } from 'firebase/firestore';
 import { format, differenceInDays } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { Package, Search, XCircle, Loader2, AlertTriangle, Clock, User, Calendar, Handshake } from 'lucide-react';
+import { Package, Search, XCircle, Loader2, AlertTriangle, Clock, User, CalendarDays, Handshake } from 'lucide-react';
 import { showToast } from '@/components/Toast';
 
 interface PickupOrder {
@@ -35,28 +35,16 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
   const fetchPickupOrders = async () => {
     setLoading(true);
     try {
-      console.log('📦 Загрузка заказов...');
-      
-      // Упрощенный запрос - загружаем все заказы, фильтруем на клиенте
       const q = query(collection(db, 'orders'));
-      
       const snapshot = await getDocs(q);
-      console.log(`✅ Загружено всего заказов: ${snapshot.docs.length}`);
-      
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PickupOrder));
-      
-      // Фильтруем на клиенте: статус "Готов к выдаче" и ТК "Самовывоз"
       const filteredData = data.filter(order => 
         order.status === 'Готов к выдаче' && order.carrier === 'Самовывоз'
       );
-      console.log(`✅ После фильтрации: ${filteredData.length} заказов Самовывоз со статусом "Готов к выдаче"`);
-      
-      // Сортируем на клиенте по дате (новые сверху)
       filteredData.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      
       setAllOrders(filteredData);
     } catch (error) {
-      console.error('❌ Ошибка загрузки заказов:', error);
+      console.error('Error fetching pickup orders:', error);
       showToast('Ошибка при загрузке заказов', 'error');
     } finally {
       setLoading(false);
@@ -190,7 +178,7 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Calendar className="w-4 h-4 text-slate-400" />
+                        <CalendarDays className="w-4 h-4 text-slate-400" />
                         <div>
                           <p className="text-slate-500 dark:text-slate-400 text-xs">Дата создания</p>
                           <p className="font-medium text-slate-700 dark:text-slate-300">
@@ -210,22 +198,22 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
                     </div>
                   </div>
                   
-                  {/* Кнопка выдачи (для всех) */}
-                  <button
-                    onClick={() => handleMarkAsIssued(order.id)}
-                    disabled={updatingOrderId === order.id}
-                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2 whitespace-nowrap self-center"
-                  >
-                    {updatingOrderId === order.id ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Handshake className="w-4 h-4" />
-                    )}
-                    Выдать клиенту
-                  </button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => handleMarkAsIssued(order.id)}
+                      disabled={updatingOrderId === order.id}
+                      className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2 whitespace-nowrap self-center"
+                    >
+                      {updatingOrderId === order.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Handshake className="w-4 h-4" />
+                      )}
+                      Выдать клиенту
+                    </button>
+                  )}
                 </div>
                 
-                {/* Предупреждение о длительном хранении */}
                 {storageDays > 14 && (
                   <div className={`mt-4 pt-3 border-t flex items-center gap-2 text-xs ${storageDays > 30 ? 'text-red-600 dark:text-red-400' : 'text-orange-600 dark:text-orange-400'}`}>
                     <AlertTriangle className="w-4 h-4" />

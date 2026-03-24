@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, Loader2, Calendar, User, Package, Truck, Layers } from 'lucide-react';
+import { X, Loader2, CalendarDays, User, Package, Truck, Layers } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { db } from '@/lib/firebase';
 import { collection, addDoc, doc, writeBatch } from 'firebase/firestore';
@@ -34,9 +34,6 @@ export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSu
     responsiblePerson: '',
     notes: ''
   });
-
-  console.log('Modal isOpen:', isOpen);
-  console.log('Selected orders:', selectedOrders);
 
   if (!isOpen) return null;
 
@@ -93,8 +90,6 @@ export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSu
         responsiblePerson: formData.responsiblePerson,
         notes: formData.notes
       };
-
-      console.log('Creating consolidation:', consolidationData);
 
       const docRef = await addDoc(collection(db, 'consolidations'), consolidationData);
 
@@ -154,7 +149,7 @@ export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSu
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-6 space-y-6 max-h-[80vh] overflow-y-auto">
+            <form onSubmit={handleSubmit} className="p-6 space-y-6">
               <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl space-y-3">
                 <h3 className="font-semibold text-slate-900 dark:text-white">Параметры партии</h3>
                 <div className="grid grid-cols-2 gap-4 text-sm">
@@ -199,7 +194,7 @@ export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSu
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    <Calendar className="w-4 h-4 inline mr-1" />
+                    <CalendarDays className="w-4 h-4 inline mr-1" />
                     Планируемая дата отправки *
                   </label>
                   <input
