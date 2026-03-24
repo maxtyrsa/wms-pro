@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
     ignoreDuringBuilds: true,
   },
   typescript: {
-    ignoreBuildErrors: true, // Игнорируем TypeScript ошибки при сборке
+    ignoreBuildErrors: true,
   },
   images: {
     remotePatterns: [
@@ -32,6 +32,13 @@ const nextConfig: NextConfig = {
       };
     }
     return config;
+  },
+  // Отключаем сборку типов
+  swcMinify: true,
+  compiler: {
+    removeConsole: process.env.NODE_ENV === 'production' ? {
+      exclude: ['error', 'warn'],
+    } : false,
   },
 };
 

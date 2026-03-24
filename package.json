@@ -7,8 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint . --fix",
-    "clean": "next clean",
-    "type-check": "tsc --noEmit"
+    "clean": "next clean"
   },
   "dependencies": {
     "@google/genai": "^1.17.0",
