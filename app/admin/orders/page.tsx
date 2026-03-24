@@ -12,8 +12,7 @@ import {
   updateDoc, 
   deleteDoc, 
   serverTimestamp,
-  getDocs,
-  setDoc
+  getDocs
 } from 'firebase/firestore';
 import { format, isWithinInterval, startOfDay, endOfDay } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
@@ -25,9 +24,10 @@ import {
   Edit2, Save, Plus, Minus, Copy
 } from 'lucide-react';
 import { showToast } from '@/components/Toast';
+import { ReturnManagement } from '@/components/returns/ReturnManagement';
 
 const CARRIERS = ['Все', 'CDEK', 'DPD', 'Деловые линии', 'Почта России', 'ПЭК', 'Самовывоз', 'Образцы', 'OZON_FBS', 'Ярмарка Мастеров', 'Yandex Market', 'WB_FBS', 'AliExpress', 'Бийск', 'OZON_FBO', 'WB_FBO'];
-const STATUSES = ['Все', 'Новый', 'Комплектация', 'Ожидает оформления', 'Готов к выдаче', 'Оформлен', 'Отправлен', 'Завершен', 'Выдан'];
+const STATUSES = ['Все', 'Новый', 'Комплектация', 'Ожидает оформления', 'Готов к выдаче', 'Оформлен', 'Отправлен', 'Завершен', 'Выдан', 'Запрошен возврат', 'Возврат одобрен', 'Возврат получен', 'На повторной обработке', 'Повторная отправка'];
 
 const PAGE_SIZE = 20;
 
@@ -144,6 +144,7 @@ export default function AdminOrdersPage() {
 
   // Открытие редактирования
   const openEditMode = () => {
+    if (!selectedOrderDetails) return;
     setEditFormData({
       orderNumber: selectedOrderDetails.orderNumber || '',
       carrier: selectedOrderDetails.carrier || '',
@@ -213,7 +214,6 @@ export default function AdminOrdersPage() {
       
       await updateDoc(orderRef, updateData);
       
-      // Обновляем локальное состояние
       setSelectedOrderDetails({
         ...selectedOrderDetails,
         ...updateData,
@@ -428,12 +428,18 @@ export default function AdminOrdersPage() {
       case 'Отправлен': return 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300';
       case 'Выдан': return 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300';
       case 'Завершен': return 'bg-slate-200 text-slate-800 border-slate-300 dark:bg-slate-800 dark:text-slate-300';
+      case 'Запрошен возврат': return 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300';
+      case 'Возврат одобрен': return 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300';
+      case 'Возврат получен': return 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300';
+      case 'На повторной обработке': return 'bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/30 dark:text-purple-300';
+      case 'Повторная отправка': return 'bg-cyan-100 text-cyan-800 border-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-300';
       default: return 'bg-slate-100 text-slate-800 border-slate-200 dark:bg-slate-800 dark:text-slate-300';
     }
   };
 
   const clearSearch = () => setSearchQuery('');
 
+  // Расчет общего веса и объема
   const getTotalVolume = (order: any) => {
     if (order.totalVolume) return order.totalVolume;
     if (order.places_data) {
@@ -476,6 +482,7 @@ export default function AdminOrdersPage() {
               <h1 className="text-xl font-bold text-slate-900 dark:text-white">Управление заказами</h1>
               <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
                 Всего: {allOrders.length} заказов • Отфильтровано: {filteredOrders.length}
+                {filteredOrders.length > displayLimit && <span className="ml-2 text-blue-500">(показано {displayLimit})</span>}
               </p>
             </div>
           </div>
@@ -486,7 +493,7 @@ export default function AdminOrdersPage() {
       </header>
 
       <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
-        {/* Поиск и фильтры - без изменений */}
+        {/* Поиск и фильтры */}
         <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 space-y-4">
           <div className="relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
@@ -508,24 +515,24 @@ export default function AdminOrdersPage() {
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">От даты</label>
               <input type="date" value={dateRange.start} onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
-                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
             </div>
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">До даты</label>
               <input type="date" value={dateRange.end} onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
-                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
             </div>
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Компания</label>
               <select value={selectedCarrier} onChange={(e) => setSelectedCarrier(e.target.value)}
-                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer">
                 {CARRIERS.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Статус</label>
               <select value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)}
-                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer">
                 {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
@@ -535,7 +542,7 @@ export default function AdminOrdersPage() {
         {/* Bulk Actions Bar */}
         <div className="flex flex-col md:flex-row items-center justify-between bg-white dark:bg-slate-900 p-4 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 gap-4">
           <div className="flex items-center gap-3">
-            <button onClick={toggleAllSelection} className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 text-sm font-bold text-slate-700 dark:text-slate-300 transition-all">
+            <button onClick={toggleAllSelection} className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 text-sm font-bold text-slate-700 dark:text-slate-300 transition-all border border-transparent hover:border-slate-200 dark:hover:border-slate-700">
               {selectedOrders.size === displayedOrders.length && displayedOrders.length > 0 ? 
                 <CheckSquare className="w-5 h-5 text-blue-600" /> : <Square className="w-5 h-5 text-slate-300" />}
               Выбрать все
@@ -548,8 +555,19 @@ export default function AdminOrdersPage() {
             <button 
               onClick={() => setMassStatusMenuOpen(!massStatusMenuOpen)} 
               disabled={selectedOrders.size === 0 || bulkUpdating}
-              className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-slate-900 dark:bg-slate-800 text-white rounded-2xl text-sm font-bold hover:bg-black disabled:opacity-30 transition-all">
-              {bulkUpdating ? <><Loader2 className="w-4 h-4 animate-spin" /> Обновление...</> : <>Массовое изменение ({selectedOrders.size})<ChevronDown className="w-4 h-4" /></>}
+              className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-slate-900 dark:bg-slate-800 text-white rounded-2xl text-sm font-bold hover:bg-black disabled:opacity-30 transition-all shadow-lg shadow-slate-200 dark:shadow-slate-800"
+            >
+              {bulkUpdating ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Обновление...
+                </>
+              ) : (
+                <>
+                  Массовое изменение ({selectedOrders.size})
+                  <ChevronDown className="w-4 h-4" />
+                </>
+              )}
             </button>
             
             <AnimatePresence>
@@ -558,7 +576,7 @@ export default function AdminOrdersPage() {
                   className="absolute right-0 mt-3 w-56 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-100 dark:border-slate-700 overflow-hidden z-40 p-1">
                   {STATUSES.filter(s => s !== 'Все').map(status => (
                     <button key={status} onClick={() => handleMassStatusChange(status)}
-                      className="w-full text-left px-4 py-3 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-blue-950/30 rounded-xl transition-all">
+                      className="w-full text-left px-4 py-3 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-blue-950/30 hover:text-blue-700 dark:hover:text-blue-400 rounded-xl transition-all">
                       {status}
                     </button>
                   ))}
@@ -583,12 +601,13 @@ export default function AdminOrdersPage() {
                   <th className="p-5 text-center">Время</th>
                   <th className="p-5 text-right">Вес</th>
                   <th className="p-5 text-right">Прибыль</th>
+                  <th className="p-5 text-right w-12"></th>
                   </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {displayedOrders.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="p-20 text-center text-slate-400 dark:text-slate-500 font-medium">
+                    <td colSpan={10} className="p-20 text-center text-slate-400 dark:text-slate-500 font-medium">
                       {searchQuery ? 'Заказы не найдены по запросу' : 'Заказы не найдены за этот период'}
                     </td>
                   </tr>
@@ -597,18 +616,36 @@ export default function AdminOrdersPage() {
                     <tr key={order.id} onClick={() => setSelectedOrderDetails(order)}
                       className={`group hover:bg-blue-50/30 dark:hover:bg-blue-950/30 transition-all cursor-pointer ${selectedOrders.has(order.id) ? 'bg-blue-50 dark:bg-blue-950/20' : ''}`}>
                       <td className="p-5" onClick={(e) => e.stopPropagation()}>
-                        <button onClick={() => toggleOrderSelection(order.id)}>
-                          {selectedOrders.has(order.id) ? <CheckSquare className="w-6 h-6 text-blue-600" /> : <Square className="w-6 h-6 text-slate-200" />}
+                        <button onClick={() => toggleOrderSelection(order.id)} className="transition-transform active:scale-90">
+                          {selectedOrders.has(order.id) ? <CheckSquare className="w-6 h-6 text-blue-600" /> : <Square className="w-6 h-6 text-slate-200 group-hover:text-slate-300" />}
                         </button>
                       </td>
-                      <td className="p-5 text-slate-500 dark:text-slate-400 text-xs">{order.createdAt ? format(new Date(order.createdAt), 'dd.MM.yy HH:mm') : '-'}</td>
+                      <td className="p-5 text-slate-500 dark:text-slate-400 text-xs font-medium whitespace-nowrap">
+                        {order.createdAt ? format(order.createdAt?.seconds ? new Date(order.createdAt.seconds * 1000) : new Date(order.createdAt), 'dd.MM.yy HH:mm') : '-'}
+                      </td>
                       <td className="p-5 font-bold text-slate-900 dark:text-white">{order.orderNumber || '—'}</td>
-                      <td className="p-5 text-slate-600 dark:text-slate-400 text-xs uppercase">{order.carrier}</td>
-                      <td className="p-5"><span className={`px-3 py-1.5 rounded-xl text-[10px] font-bold border uppercase ${getStatusColor(order.status)}`}>{order.status}</span></td>
-                      <td className="p-5 text-slate-600 dark:text-slate-400 text-xs truncate max-w-[120px]">{order.createdBy?.split('@')[0] || order.createdBy || 'Система'}</td>
+                      <td className="p-5 text-slate-600 dark:text-slate-400 font-semibold text-xs uppercase">{order.carrier}</td>
+                      <td className="p-5">
+                        <span className={`px-3 py-1.5 rounded-xl text-[10px] font-bold border uppercase tracking-tight ${getStatusColor(order.status)}`}>
+                          {order.status}
+                        </span>
+                      </td>
+                      <td className="p-5 text-slate-600 dark:text-slate-400 text-xs font-medium truncate max-w-[120px]">{order.createdBy?.split('@')[0] || order.createdBy || 'Система'}</td>
                       <td className="p-5 text-center font-mono text-xs text-slate-500 dark:text-slate-400">{formatAssemblyTime(order.time_start, order.time_end)}</td>
                       <td className="p-5 text-right font-bold text-slate-900 dark:text-white">{order.totalWeight ? `${Number(order.totalWeight).toFixed(1)} кг` : '—'}</td>
                       <td className="p-5 text-right font-bold text-emerald-600 dark:text-emerald-400">{order.profit ? `${order.profit.toLocaleString()} ₽` : '—'}</td>
+                      <td className="p-5 text-right">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedOrderDetails(order);
+                            openEditMode();
+                          }}
+                          className="p-2 text-slate-400 hover:text-blue-600 transition-colors opacity-0 group-hover:opacity-100"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -616,9 +653,13 @@ export default function AdminOrdersPage() {
             </table>
           </div>
           
+          {/* Pagination Controls */}
           {!loading && filteredOrders.length > 0 && hasMoreOrders && (
-            <div className="flex justify-center px-6 py-4 border-t border-slate-200 dark:border-slate-800">
-              <button onClick={loadMore} className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium">
+            <div className="flex items-center justify-center px-6 py-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-800/30">
+              <button
+                onClick={loadMore}
+                className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-all"
+              >
                 <ChevronRight className="w-4 h-4" />
                 Показать еще {Math.min(PAGE_SIZE, filteredOrders.length - displayLimit)} заказов
               </button>
@@ -627,11 +668,11 @@ export default function AdminOrdersPage() {
         </div>
       </div>
 
-      {/* Модальное окно просмотра/редактирования заказа */}
+      {/* Модальное окно деталей заказа */}
       <AnimatePresence>
         {selectedOrderDetails && (
           <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-sm" onClick={() => { setSelectedOrderDetails(null); closeEditMode(); }}>
-            <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 25 }}
+            <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }}
               onClick={(e) => e.stopPropagation()} className="bg-white dark:bg-slate-900 h-full w-full max-w-2xl shadow-2xl flex flex-col relative">
               
               <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
@@ -795,20 +836,8 @@ export default function AdminOrdersPage() {
                       <button onClick={handleSaveFinance} disabled={savingFinance} className="w-full py-2 bg-blue-600 text-white rounded-xl text-sm font-medium">{savingFinance ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Сохранить финансы'}</button>
                     </div>
 
-                    {/* История изменений */}
-                    {selectedOrderDetails.history && selectedOrderDetails.history.length > 0 && (
-                      <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
-                        <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2 mb-3"><Clock className="w-4 h-4 text-slate-400" />История изменений</h3>
-                        <div className="space-y-2 max-h-48 overflow-y-auto">
-                          {selectedOrderDetails.history.slice().reverse().map((item: any, idx: number) => (
-                            <div key={idx} className="flex items-start gap-3 p-2 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                              <div className="w-2 h-2 mt-1.5 rounded-full bg-blue-500 shrink-0"></div>
-                              <div className="flex-1"><div className="flex justify-between"><span className={`px-2 py-0.5 rounded text-[10px] font-bold ${getStatusColor(item.status)}`}>{item.status}</span><span className="text-[10px] text-slate-500">{format(new Date(item.timestamp), 'dd.MM.yyyy HH:mm')}</span></div><p className="text-[10px] text-slate-500 mt-0.5">{item.user}</p></div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                    {/* Управление возвратами */}
+                    <ReturnManagement order={selectedOrderDetails} onUpdate={loadAllOrders} />
 
                     {/* Управление статусом */}
                     <div className="bg-blue-50 dark:bg-blue-950/30 p-5 rounded-3xl space-y-4">
@@ -828,6 +857,21 @@ export default function AdminOrdersPage() {
                         {STATUSES.filter(s => s !== 'Все').map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
                     </div>
+
+                    {/* История изменений */}
+                    {selectedOrderDetails.history && selectedOrderDetails.history.length > 0 && (
+                      <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
+                        <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2 mb-3"><Clock className="w-4 h-4 text-slate-400" />История изменений</h3>
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                          {selectedOrderDetails.history.slice().reverse().map((item: any, idx: number) => (
+                            <div key={idx} className="flex items-start gap-3 p-2 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                              <div className="w-2 h-2 mt-1.5 rounded-full bg-blue-500 shrink-0"></div>
+                              <div className="flex-1"><div className="flex justify-between"><span className={`px-2 py-0.5 rounded text-[10px] font-bold ${getStatusColor(item.status)}`}>{item.status}</span><span className="text-[10px] text-slate-500">{format(new Date(item.timestamp), 'dd.MM.yyyy HH:mm')}</span></div><p className="text-[10px] text-slate-500 mt-0.5">{item.user}</p></div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Danger Zone */}
                     <div className="pt-4 border-t border-red-200 dark:border-red-800">

@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { motion } from 'motion/react';
 import { startOfDay, endOfDay, differenceInSeconds, format } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { LogOut, Package, Users, LayoutDashboard, ShieldAlert, FileSpreadsheet, ClipboardList, Clock, Truck, TrendingUp, Layers, Send, Menu, X } from 'lucide-react';
+import { LogOut, Package, Users, LayoutDashboard, ShieldAlert, FileSpreadsheet, ClipboardList, Clock, Truck, TrendingUp, Layers, Send, Menu, X, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 import { collection, query, orderBy, limit, onSnapshot, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
@@ -230,6 +230,13 @@ export default function DashboardPage() {
               icon={<Layers />}
               title="Консоли отправки"
               color="cyan"
+            />
+            <NavCard 
+              href="/admin/returns"
+              icon={<RefreshCw />}
+              title="Возвраты"
+              description="История возвратов"
+              color="orange"
             />
           </div>
         )}
