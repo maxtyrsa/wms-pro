@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { 
@@ -51,10 +51,10 @@ export function ShippedOrdersList() {
     try {
       console.log('📦 Загрузка заказов со статусом "Оформлен"...');
       
+      // Упрощенный запрос - без orderBy, только where
       const q = query(
         collection(db, 'orders'),
-        where('status', '==', 'Оформлен'),
-        orderBy('createdAt', 'desc')
+        where('status', '==', 'Оформлен')
       );
       
       const snapshot = await getDocs(q);
@@ -112,6 +112,9 @@ export function ShippedOrdersList() {
         return orderDate >= start && orderDate <= end;
       });
     }
+    
+    // Сортируем на клиенте по дате (новые сверху)
+    filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     
     return filtered;
   }, [allOrders, searchQuery, selectedCarrier, dateFilter]);
