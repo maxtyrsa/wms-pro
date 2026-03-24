@@ -7,9 +7,12 @@ import {
   signInWithRedirect,
   getRedirectResult,
   signOut, 
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
   User as FirebaseUser 
 } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db, googleProvider } from '@/lib/firebase';
 
 interface AuthContextType {
@@ -19,6 +22,9 @@ interface AuthContextType {
   error: string | null;
   signInWithGoogle: () => Promise<void>;
   signInWithGoogleRedirect: () => Promise<void>;
+  signInWithEmail: (email: string, password: string) => Promise<void>;
+  signUpWithEmail: (email: string, password: string, displayName: string) => Promise<void>;
+  resetPassword: (email: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -31,7 +37,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Handle redirect result
     getRedirectResult(auth).catch((err) => {
       console.error('Redirect result error:', err);
       if (err.code === 'auth/unauthorized-domain') {
@@ -47,12 +52,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
           const email = firebaseUser.email?.toLowerCase();
           if (!email) {
-            throw new Error('Email not found in Google account');
+            throw new Error('Email не найден в аккаунте');
           }
           const userDocRef = doc(db, 'users', email);
           const userDoc = await getDoc(userDocRef);
           
-          const SUPER_ADMIN_EMAIL = process.env.NEXT_PUBLIC_SUPER_ADMIN_EMAIL;
+          const SUPER_ADMIN_EMAIL = process.env.NEXT_PUBLIC_SUPER_ADMIN_EMAIL || 'maximtyrsa89@gmail.com';
           const isSuperAdmin = email === SUPER_ADMIN_EMAIL;
 
           if (userDoc.exists()) {
@@ -60,14 +65,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setUser(firebaseUser);
             setRole(userData.role as 'admin' | 'employee');
           } else if (isSuperAdmin) {
-            // Bootstrap admin: allow access and set role
+            // Создаем запись для суперадмина
+            await setDoc(userDocRef, {
+              email: email,
+              displayName: firebaseUser.displayName || 'Администратор',
+              role: 'admin'
+            });
             setUser(firebaseUser);
             setRole('admin');
           } else {
-            // Security constraint: email must exist in users collection
             setUser(null);
             setRole(null);
-            setError('DEBUG: email=[' + email + '] isSuperAdmin=' + isSuperAdmin + '. Доступ запрещен. Обратитесь к администратору.');
+            setError(`Доступ запрещен. Email ${email} не найден в системе. Обратитесь к администратору.`);
             await signOut(auth);
           }
         } catch (err) {
@@ -96,9 +105,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (err: any) {
       console.error('Login error:', err);
       if (err.code === 'auth/popup-blocked') {
-        setError('Всплывающее окно заблокировано. Попробуйте войти через редирект или откройте приложение в новой вкладке.');
+        setError('Всплывающее окно заблокировано. Попробуйте войти через редирект.');
       } else if (err.code === 'auth/cancelled-popup-request') {
-        // This is often a benign error if another request was started
         console.log('Cancelled popup request');
       } else if (err.code === 'auth/popup-closed-by-user') {
         setError('Окно входа было закрыто пользователем.');
@@ -123,6 +131,93 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const signInWithEmail = async (email: string, password: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await signInWithEmailAndPassword(auth, email.toLowerCase(), password);
+      const userDocRef = doc(db, 'users', email.toLowerCase());
+      const userDoc = await getDoc(userDocRef);
+      
+      if (!userDoc.exists()) {
+        await signOut(auth);
+        setError('Пользователь не найден в системе. Обратитесь к администратору.');
+        return;
+      }
+      
+      const userData = userDoc.data();
+      if (userData.role !== 'admin' && userData.role !== 'employee') {
+        await signOut(auth);
+        setError('Недостаточно прав для входа');
+        return;
+      }
+    } catch (err: any) {
+      console.error('Email login error:', err);
+      if (err.code === 'auth/user-not-found') {
+        setError('Пользователь не найден');
+      } else if (err.code === 'auth/wrong-password') {
+        setError('Неверный пароль');
+      } else if (err.code === 'auth/invalid-email') {
+        setError('Неверный формат email');
+      } else {
+        setError(err.message || 'Ошибка входа');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const signUpWithEmail = async (email: string, password: string, displayName: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await createUserWithEmailAndPassword(auth, email.toLowerCase(), password);
+      
+      // Создаем запись пользователя в Firestore
+      const userDocRef = doc(db, 'users', email.toLowerCase());
+      await setDoc(userDocRef, {
+        email: email.toLowerCase(),
+        displayName: displayName,
+        role: 'employee' // По умолчанию сотрудник
+      });
+      
+      setUser(result.user);
+      setRole('employee');
+    } catch (err: any) {
+      console.error('Email signup error:', err);
+      if (err.code === 'auth/email-already-in-use') {
+        setError('Email уже используется');
+      } else if (err.code === 'auth/weak-password') {
+        setError('Пароль слишком слабый (минимум 6 символов)');
+      } else if (err.code === 'auth/invalid-email') {
+        setError('Неверный формат email');
+      } else {
+        setError(err.message || 'Ошибка регистрации');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resetPassword = async (email: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      await sendPasswordResetEmail(auth, email);
+    } catch (err: any) {
+      console.error('Password reset error:', err);
+      if (err.code === 'auth/user-not-found') {
+        setError('Пользователь не найден');
+      } else if (err.code === 'auth/invalid-email') {
+        setError('Неверный формат email');
+      } else {
+        setError(err.message || 'Ошибка отправки письма');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const logout = async () => {
     try {
       await signOut(auth);
@@ -132,7 +227,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, role, loading, error, signInWithGoogle, signInWithGoogleRedirect, logout }}>
+    <AuthContext.Provider value={{ 
+      user, role, loading, error, 
+      signInWithGoogle, 
+      signInWithGoogleRedirect,
+      signInWithEmail,
+      signUpWithEmail,
+      resetPassword,
+      logout 
+    }}>
       {children}
     </AuthContext.Provider>
   );
