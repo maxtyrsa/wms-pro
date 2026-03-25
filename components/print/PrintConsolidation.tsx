@@ -1,9 +1,12 @@
 'use client';
 
-import React from 'react';
-import { Printer, Package, Truck, CalendarDays, User, Hash, Weight, Box, DollarSign } from 'lucide-react';
+import React, { useState } from 'react';
+import { Printer, Package, Truck, CalendarDays, User, Hash, Weight, Box, DollarSign, X, Plus, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { showToast } from '@/components/Toast';
+import { doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 interface Consolidation {
   id: string;
@@ -26,13 +29,17 @@ interface Consolidation {
 interface PrintConsolidationProps {
   consolidation: Consolidation;
   onClose: () => void;
+  onUpdate?: () => void;
+  availableOrders?: any[];
 }
 
-export function PrintConsolidation({ consolidation, onClose }: PrintConsolidationProps) {
+export function PrintConsolidation({ consolidation, onClose, onUpdate, availableOrders = [] }: PrintConsolidationProps) {
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(false);
+
   const handlePrint = () => {
     const printContent = document.getElementById('print-content');
-    const originalTitle = document.title;
-    
     if (!printContent) return;
     
     const printWindow = window.open('', '_blank');
@@ -66,7 +73,7 @@ export function PrintConsolidation({ consolidation, onClose }: PrintConsolidatio
             td { padding: 12px; font-size: 13px; border-bottom: 1px solid #e2e8f0; color: #334155; }
             .total-row { background: #f8fafc; font-weight: 600; }
             .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #94a3b8; }
-            @media print { body { padding: 0; } .no-print { display: none; } .info-grid, .stat-card { break-inside: avoid; } table { break-inside: auto; } tr { break-inside: avoid; } }
+            @media print { body { padding: 0; } .no-print { display: none; } }
           </style>
         </head>
         <body>
@@ -84,6 +91,106 @@ export function PrintConsolidation({ consolidation, onClose }: PrintConsolidatio
     printWindow.document.close();
     printWindow.print();
     printWindow.onafterprint = () => printWindow.close();
+  };
+
+  const handleRemoveOrder = async (orderId: string) => {
+    if (!confirm('Удалить заказ из консоли?')) return;
+    
+    setLoading(true);
+    try {
+      const orderToRemove = consolidation.orders.find(o => o.id === orderId);
+      if (!orderToRemove) return;
+      
+      const consolidationRef = doc(db, 'consolidations', consolidation.id);
+      await updateDoc(consolidationRef, {
+        orders: arrayRemove(orderToRemove),
+        totalOrders: consolidation.totalOrders - 1,
+        totalWeight: consolidation.totalWeight - (orderToRemove.totalWeight || 0),
+        totalVolume: consolidation.totalVolume - (orderToRemove.totalVolume || 0),
+        totalProfit: consolidation.totalProfit - (orderToRemove.profit || 0)
+      });
+      
+      // Возвращаем заказ в статус "Оформлен"
+      const orderRef = doc(db, 'orders', orderId);
+      await updateDoc(orderRef, {
+        status: 'Оформлен',
+        consolidationId: null
+      });
+      
+      showToast('Заказ удален из консоли', 'success');
+      if (onUpdate) onUpdate();
+      onClose();
+    } catch (error) {
+      console.error('Error removing order:', error);
+      showToast('Ошибка при удалении заказа', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAddOrders = async () => {
+    if (selectedOrders.size === 0) return;
+    
+    setLoading(true);
+    try {
+      const ordersToAdd = availableOrders.filter(o => selectedOrders.has(o.id));
+      let newTotalWeight = consolidation.totalWeight;
+      let newTotalVolume = consolidation.totalVolume;
+      let newTotalProfit = consolidation.totalProfit;
+      const newOrders = [...consolidation.orders];
+      
+      for (const order of ordersToAdd) {
+        newOrders.push(order);
+        newTotalWeight += order.totalWeight || 0;
+        newTotalVolume += order.totalVolume || 0;
+        newTotalProfit += order.profit || 0;
+        
+        // Меняем статус заказа
+        const orderRef = doc(db, 'orders', order.id);
+        await updateDoc(orderRef, {
+          status: 'В консолидации',
+          consolidationId: consolidation.id
+        });
+      }
+      
+      const consolidationRef = doc(db, 'consolidations', consolidation.id);
+      await updateDoc(consolidationRef, {
+        orders: newOrders,
+        totalOrders: newOrders.length,
+        totalWeight: newTotalWeight,
+        totalVolume: newTotalVolume,
+        totalProfit: newTotalProfit
+      });
+      
+      showToast(`Добавлено ${selectedOrders.size} заказов`, 'success');
+      setShowAddModal(false);
+      setSelectedOrders(new Set());
+      if (onUpdate) onUpdate();
+      onClose();
+    } catch (error) {
+      console.error('Error adding orders:', error);
+      showToast('Ошибка при добавлении заказов', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleOrderSelection = (orderId: string) => {
+    const newSelection = new Set(selectedOrders);
+    if (newSelection.has(orderId)) {
+      newSelection.delete(orderId);
+    } else {
+      newSelection.add(orderId);
+    }
+    setSelectedOrders(newSelection);
+  };
+
+  const toggleAllSelection = () => {
+    if (selectedOrders.size === availableOrders.length) {
+      setSelectedOrders(new Set());
+    } else {
+      setSelectedOrders(new Set(availableOrders.map(o => o.id)));
+    }
   };
 
   const getStatusText = (status: string) => {
@@ -104,22 +211,42 @@ export function PrintConsolidation({ consolidation, onClose }: PrintConsolidatio
     }
   };
 
+  const isEditable = consolidation.status === 'pending';
+
   return (
     <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
       <div className="sticky top-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 p-4 flex items-center justify-between">
-        <h2 className="text-xl font-bold text-slate-900 dark:text-white">Печать консоли</h2>
+        <h2 className="text-xl font-bold text-slate-900 dark:text-white">Консоль {consolidation.consolidationNumber}</h2>
         <div className="flex gap-2">
-          <button onClick={handlePrint} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium flex items-center gap-2 transition-colors">
-            <Printer className="w-4 h-4" />
-            Печать
-          </button>
-          <button onClick={onClose} className="px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+          {isEditable && (
+            <>
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-medium flex items-center gap-2 transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Добавить заказы
+              </button>
+              <button
+                onClick={handlePrint}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium flex items-center gap-2 transition-colors"
+              >
+                <Printer className="w-4 h-4" />
+                Печать
+              </button>
+            </>
+          )}
+          <button
+            onClick={onClose}
+            className="px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+          >
             Закрыть
           </button>
         </div>
       </div>
 
       <div id="print-content" className="p-6">
+        {/* Заголовок */}
         <div className="text-center mb-8 pb-4 border-b border-slate-200 dark:border-slate-800">
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
             Консоль отправки #{consolidation.consolidationNumber}
@@ -129,6 +256,7 @@ export function PrintConsolidation({ consolidation, onClose }: PrintConsolidatio
           </p>
         </div>
 
+        {/* Основная информация */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 bg-slate-50 dark:bg-slate-800 p-5 rounded-xl">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-slate-200 dark:bg-slate-700 rounded-lg flex items-center justify-center">
@@ -172,6 +300,7 @@ export function PrintConsolidation({ consolidation, onClose }: PrintConsolidatio
           </div>
         </div>
 
+        {/* Статистика */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div className="text-center p-4 bg-blue-50 dark:bg-blue-950/30 rounded-xl">
             <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{consolidation.totalOrders}</div>
@@ -191,6 +320,7 @@ export function PrintConsolidation({ consolidation, onClose }: PrintConsolidatio
           </div>
         </div>
 
+        {/* Таблица заказов */}
         <div className="mb-6">
           <h3 className="font-bold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
             <Package className="w-4 h-4" />
@@ -206,7 +336,8 @@ export function PrintConsolidation({ consolidation, onClose }: PrintConsolidatio
                   <th className="px-3 py-2 text-left text-xs font-semibold">Вес, кг</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold">Объем, м³</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold">Прибыль, ₽</th>
-                </tr>
+                  {isEditable && <th className="px-3 py-2 text-center text-xs font-semibold"></th>}
+                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {consolidation.orders.map((order, idx) => (
@@ -219,6 +350,17 @@ export function PrintConsolidation({ consolidation, onClose }: PrintConsolidatio
                     <td className="px-3 py-2 text-sm text-right font-medium text-emerald-600 dark:text-emerald-400">
                       {order.profit?.toLocaleString() || 0}
                     </td>
+                    {isEditable && (
+                      <td className="px-3 py-2 text-center">
+                        <button
+                          onClick={() => handleRemoveOrder(order.id)}
+                          disabled={loading}
+                          className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
                 <tr className="bg-slate-50 dark:bg-slate-800 font-semibold">
@@ -229,6 +371,7 @@ export function PrintConsolidation({ consolidation, onClose }: PrintConsolidatio
                   <td className="px-3 py-3 text-sm text-right text-emerald-700 dark:text-emerald-400">
                     {consolidation.totalProfit.toLocaleString()}
                   </td>
+                  {isEditable && <td></td>}
                 </tr>
               </tbody>
             </table>
@@ -242,6 +385,77 @@ export function PrintConsolidation({ consolidation, onClose }: PrintConsolidatio
           </div>
         )}
       </div>
+
+      {/* Модальное окно добавления заказов */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col">
+            <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+              <h3 className="text-xl font-bold text-slate-900 dark:text-white">Добавить заказы в консоль</h3>
+              <button onClick={() => setShowAddModal(false)} className="p-2 hover:bg-slate-100 rounded-full">
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-6">
+              {availableOrders.length === 0 ? (
+                <p className="text-center text-slate-500 py-8">Нет доступных заказов для добавления</p>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between mb-4">
+                    <button
+                      onClick={toggleAllSelection}
+                      className="text-sm text-blue-600 hover:underline"
+                    >
+                      {selectedOrders.size === availableOrders.length ? 'Снять все' : 'Выбрать все'}
+                    </button>
+                    <span className="text-sm text-slate-500">Выбрано: {selectedOrders.size}</span>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    {availableOrders.map(order => (
+                      <div
+                        key={order.id}
+                        className={`p-4 rounded-xl border cursor-pointer transition-all ${
+                          selectedOrders.has(order.id)
+                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/30'
+                            : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                        }`}
+                        onClick={() => toggleOrderSelection(order.id)}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="font-bold text-slate-900 dark:text-white">Заказ №{order.orderNumber}</p>
+                            <p className="text-sm text-slate-500">{order.carrier} · {order.quantity} мест · {order.totalWeight} кг</p>
+                          </div>
+                          <span className="text-emerald-600 font-bold">{order.profit?.toLocaleString()} ₽</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+            
+            <div className="p-6 border-t border-slate-200 dark:border-slate-800 flex gap-3">
+              <button
+                onClick={() => setShowAddModal(false)}
+                className="flex-1 py-3 border border-slate-200 rounded-xl text-slate-700 font-medium"
+              >
+                Отмена
+              </button>
+              <button
+                onClick={handleAddOrders}
+                disabled={selectedOrders.size === 0 || loading}
+                className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                Добавить ({selectedOrders.size})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
