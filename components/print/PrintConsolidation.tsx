@@ -101,6 +101,8 @@ export function PrintConsolidation({ consolidation, onClose, onUpdate, available
       const orderToRemove = consolidation.orders.find(o => o.id === orderId);
       if (!orderToRemove) return;
       
+      const orderQuantity = orderToRemove.quantity || 1;
+      
       const consolidationRef = doc(db, 'consolidations', consolidation.id);
       await updateDoc(consolidationRef, {
         orders: arrayRemove(orderToRemove),
@@ -134,6 +136,7 @@ export function PrintConsolidation({ consolidation, onClose, onUpdate, available
     setLoading(true);
     try {
       const ordersToAdd = availableOrders.filter(o => selectedOrders.has(o.id));
+      let newTotalOrders = consolidation.totalOrders;
       let newTotalWeight = consolidation.totalWeight;
       let newTotalVolume = consolidation.totalVolume;
       let newTotalProfit = consolidation.totalProfit;
@@ -141,6 +144,7 @@ export function PrintConsolidation({ consolidation, onClose, onUpdate, available
       
       for (const order of ordersToAdd) {
         newOrders.push(order);
+        newTotalOrders += 1; // Количество заказов
         newTotalWeight += order.totalWeight || 0;
         newTotalVolume += order.totalVolume || 0;
         newTotalProfit += order.profit || 0;
@@ -156,7 +160,7 @@ export function PrintConsolidation({ consolidation, onClose, onUpdate, available
       const consolidationRef = doc(db, 'consolidations', consolidation.id);
       await updateDoc(consolidationRef, {
         orders: newOrders,
-        totalOrders: newOrders.length,
+        totalOrders: newTotalOrders,
         totalWeight: newTotalWeight,
         totalVolume: newTotalVolume,
         totalProfit: newTotalProfit
@@ -192,6 +196,9 @@ export function PrintConsolidation({ consolidation, onClose, onUpdate, available
       setSelectedOrders(new Set(availableOrders.map(o => o.id)));
     }
   };
+
+  // Подсчет общего количества мест (сумма quantity всех заказов)
+  const totalPlaces = consolidation.orders.reduce((sum, order) => sum + (order.quantity || 1), 0);
 
   const getStatusText = (status: string) => {
     switch (status) {
@@ -307,12 +314,12 @@ export function PrintConsolidation({ consolidation, onClose, onUpdate, available
             <div className="text-xs text-slate-500 dark:text-slate-400 uppercase mt-1">Заказов</div>
           </div>
           <div className="text-center p-4 bg-emerald-50 dark:bg-emerald-950/30 rounded-xl">
-            <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{consolidation.totalWeight.toFixed(1)}</div>
-            <div className="text-xs text-slate-500 dark:text-slate-400 uppercase mt-1">Вес, кг</div>
+            <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{totalPlaces}</div>
+            <div className="text-xs text-slate-500 dark:text-slate-400 uppercase mt-1">Мест</div>
           </div>
           <div className="text-center p-4 bg-purple-50 dark:bg-purple-950/30 rounded-xl">
-            <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">{consolidation.totalVolume.toFixed(4)}</div>
-            <div className="text-xs text-slate-500 dark:text-slate-400 uppercase mt-1">Объем, м³</div>
+            <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">{consolidation.totalWeight.toFixed(1)}</div>
+            <div className="text-xs text-slate-500 dark:text-slate-400 uppercase mt-1">Вес, кг</div>
           </div>
           <div className="text-center p-4 bg-amber-50 dark:bg-amber-950/30 rounded-xl">
             <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">{consolidation.totalProfit.toLocaleString()}</div>
@@ -344,7 +351,7 @@ export function PrintConsolidation({ consolidation, onClose, onUpdate, available
                   <tr key={idx}>
                     <td className="px-3 py-2 text-sm">{idx + 1}</td>
                     <td className="px-3 py-2 text-sm font-medium">{order.orderNumber}</td>
-                    <td className="px-3 py-2 text-sm">{order.quantity}</td>
+                    <td className="px-3 py-2 text-sm">{order.quantity || 1}</td>
                     <td className="px-3 py-2 text-sm">{order.totalWeight?.toFixed(2) || 0}</td>
                     <td className="px-3 py-2 text-sm">{order.totalVolume?.toFixed(6) || 0}</td>
                     <td className="px-3 py-2 text-sm text-right font-medium text-emerald-600 dark:text-emerald-400">
@@ -365,7 +372,7 @@ export function PrintConsolidation({ consolidation, onClose, onUpdate, available
                 ))}
                 <tr className="bg-slate-50 dark:bg-slate-800 font-semibold">
                   <td colSpan={2} className="px-3 py-3 text-sm">ИТОГО:</td>
-                  <td className="px-3 py-3 text-sm">{consolidation.totalOrders}</td>
+                  <td className="px-3 py-3 text-sm">{totalPlaces}</td>
                   <td className="px-3 py-3 text-sm">{consolidation.totalWeight.toFixed(2)}</td>
                   <td className="px-3 py-3 text-sm">{consolidation.totalVolume.toFixed(6)}</td>
                   <td className="px-3 py-3 text-sm text-right text-emerald-700 dark:text-emerald-400">
@@ -426,7 +433,9 @@ export function PrintConsolidation({ consolidation, onClose, onUpdate, available
                         <div className="flex items-center justify-between">
                           <div>
                             <p className="font-bold text-slate-900 dark:text-white">Заказ №{order.orderNumber}</p>
-                            <p className="text-sm text-slate-500">{order.carrier} · {order.quantity} мест · {order.totalWeight} кг</p>
+                            <p className="text-sm text-slate-500">
+                              {order.carrier} · {order.quantity || 1} мест · {order.totalWeight || 0} кг
+                            </p>
                           </div>
                           <span className="text-emerald-600 font-bold">{order.profit?.toLocaleString()} ₽</span>
                         </div>
