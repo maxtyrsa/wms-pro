@@ -13,7 +13,7 @@ interface PickupOrder {
   orderNumber?: string;
   carrier: string;
   status: string;
-  createdAt: string;
+  createdAt: any;
   createdBy: string;
   time_end?: string;
 }
@@ -72,7 +72,7 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
     }
   };
 
-  const getStorageDays = (createdAt: string) => {
+  const getStorageDays = (createdAt: any) => {
     const created = new Date(createdAt);
     const now = new Date();
     return differenceInDays(now, created);
