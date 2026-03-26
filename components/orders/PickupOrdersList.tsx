@@ -7,7 +7,6 @@ import { format, differenceInDays } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { Package, Search, XCircle, Loader2, AlertTriangle, Clock, User, CalendarDays, Handshake } from 'lucide-react';
 import { showToast } from '@/components/Toast';
-import { format, differenceInDays, differenceInHours } from 'date-fns';
 
 interface PickupOrder {
   id: string;
