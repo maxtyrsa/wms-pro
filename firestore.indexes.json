@@ -1,0 +1,60 @@
+{
+    "indexes": [
+      {
+        "collectionGroup": "orders",
+        "queryScope": "COLLECTION",
+        "fields": [
+          { "fieldPath": "carrier", "order": "ASCENDING" },
+          { "fieldPath": "status", "order": "ASCENDING" },
+          { "fieldPath": "createdAt", "order": "DESCENDING" },
+          { "fieldPath": "__name__", "order": "ASCENDING" }
+        ]
+      },
+      {
+        "collectionGroup": "orders",
+        "queryScope": "COLLECTION",
+        "fields": [
+          { "fieldPath": "status", "order": "ASCENDING" },
+          { "fieldPath": "createdAt", "order": "DESCENDING" },
+          { "fieldPath": "__name__", "order": "ASCENDING" }
+        ]
+      },
+      {
+        "collectionGroup": "orders",
+        "queryScope": "COLLECTION",
+        "fields": [
+          { "fieldPath": "carrier", "order": "ASCENDING" },
+          { "fieldPath": "createdAt", "order": "DESCENDING" },
+          { "fieldPath": "__name__", "order": "ASCENDING" }
+        ]
+      },
+      {
+        "collectionGroup": "orders",
+        "queryScope": "COLLECTION",
+        "fields": [
+          { "fieldPath": "orderNumber", "order": "ASCENDING" },
+          { "fieldPath": "createdAt", "order": "DESCENDING" },
+          { "fieldPath": "__name__", "order": "ASCENDING" }
+        ]
+      },
+      {
+        "collectionGroup": "orders",
+        "queryScope": "COLLECTION",
+        "fields": [
+          { "fieldPath": "createdAt", "order": "ASCENDING" },
+          { "fieldPath": "__name__", "order": "ASCENDING" }
+        ]
+      },
+      {
+        "collectionGroup": "orders",
+        "queryScope": "COLLECTION",
+        "fields": [
+          { "fieldPath": "status", "order": "ASCENDING" },
+          { "fieldPath": "carrier", "order": "ASCENDING" },
+          { "fieldPath": "createdAt", "order": "DESCENDING" },
+          { "fieldPath": "__name__", "order": "ASCENDING" }
+        ]
+      }
+    ],
+    "fieldOverrides": []
+  }

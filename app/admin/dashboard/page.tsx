@@ -1,13 +1,16 @@
+// app/admin/dashboard/page.tsx
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
 import { 
   collection, 
   query, 
   getDocs,
-  orderBy
+  orderBy,
+  where,
+  Timestamp
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { 
@@ -40,16 +43,18 @@ import {
   ArrowLeft,
   Filter,
   Truck,
-  DollarSign
+  DollarSign,
+  RefreshCw
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { format, startOfWeek, endOfWeek, eachDayOfInterval, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
+import { format, startOfWeek, endOfWeek, eachDayOfInterval, startOfDay, endOfDay, isWithinInterval, subDays } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { showToast } from '@/components/Toast';
 
 interface Order {
   id: string;
   status: string;
-  createdAt: string;
+  createdAt: any;
   time_start?: any;
   time_end?: any;
   totalWeight?: number;
@@ -100,6 +105,7 @@ export default function AdminDashboard() {
     start: format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd'),
     end: format(new Date(), 'yyyy-MM-dd'),
   });
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
     if (!authLoading && role !== 'admin') {
@@ -107,42 +113,42 @@ export default function AdminDashboard() {
     }
   }, [authLoading, role, router]);
 
+  const fetchOrders = async () => {
+    try {
+      setIsRefreshing(true);
+      const start = startOfDay(new Date(dateFilter.start));
+      const end = endOfDay(new Date(dateFilter.end));
+      
+      // Оптимизированный запрос: загружаем только заказы за выбранный период
+      const ordersQuery = query(
+        collection(db, 'orders'),
+        where('createdAt', '>=', start.toISOString()),
+        where('createdAt', '<=', end.toISOString()),
+        orderBy('createdAt', 'desc')
+      );
+      
+      const snapshot = await getDocs(ordersQuery);
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
+      setOrders(data);
+    } catch (error) {
+      console.error('Firestore Error in Admin Dashboard:', error);
+      showToast('Ошибка при загрузке статистики', 'error');
+    } finally {
+      setLoading(false);
+      setIsRefreshing(false);
+    }
+  };
+
   useEffect(() => {
-    if (role !== 'admin') return;
-
-    const fetchOrders = async () => {
-      try {
-        const ordersQuery = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
-        const snapshot = await getDocs(ordersQuery);
-        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
-        setOrders(data);
-      } catch (error) {
-        console.error('Firestore Error in Admin Dashboard:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchOrders();
-  }, [role]);
+  }, [dateFilter]);
 
-  const filteredOrders = useMemo(() => {
-    if (!dateFilter.start || !dateFilter.end) return orders;
-    
-    const start = startOfDay(new Date(dateFilter.start));
-    const end = endOfDay(new Date(dateFilter.end));
-    
-    return orders.filter(order => {
-      const orderDate = new Date(order.createdAt);
-      return isWithinInterval(orderDate, { start, end });
-    });
-  }, [orders, dateFilter]);
-
+  // Статистика
   const stats = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    const ordersToday = filteredOrders.filter(o => new Date(o.createdAt) >= today);
+    const ordersToday = orders.filter(o => new Date(o.createdAt) >= today);
     
     let totalWeight = 0;
     let totalVolume = 0;
@@ -152,7 +158,7 @@ export default function AdminDashboard() {
     let totalDeliveryCost = 0;
     let totalProfit = 0;
 
-    filteredOrders.forEach(o => {
+    orders.forEach(o => {
       if (o.totalWeight) totalWeight += Number(o.totalWeight) || 0;
       if (o.totalVolume) totalVolume += Number(o.totalVolume) || 0;
       
@@ -183,27 +189,14 @@ export default function AdminDashboard() {
       assembledCount: assembledCount,
       weight: totalWeight.toFixed(1),
       volume: totalVolume.toFixed(4),
-      totalCount: filteredOrders.length,
+      totalCount: orders.length,
       totalPayment: totalPaymentSum,
       totalDelivery: totalDeliveryCost,
       totalProfit: totalProfit
     };
-  }, [filteredOrders]);
+  }, [orders]);
 
-  const weeklyChartData = useMemo(() => {
-    const dayNames = ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС'];
-    const dayCounts = [0, 0, 0, 0, 0, 0, 0];
-    
-    filteredOrders.forEach(order => {
-      const orderDate = new Date(order.createdAt);
-      const dayOfWeek = orderDate.getDay();
-      let index = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-      dayCounts[index]++;
-    });
-    
-    return dayNames.map((name, i) => ({ name, заказы: dayCounts[i] }));
-  }, [filteredOrders]);
-
+  // Данные для графиков
   const dailyOrdersData = useMemo(() => {
     const start = startOfDay(new Date(dateFilter.start));
     const end = endOfDay(new Date(dateFilter.end));
@@ -212,7 +205,7 @@ export default function AdminDashboard() {
     return days.map(day => {
       const dayStart = startOfDay(day);
       const dayEnd = endOfDay(day);
-      const count = filteredOrders.filter(order => {
+      const count = orders.filter(order => {
         const orderDate = new Date(order.createdAt);
         return orderDate >= dayStart && orderDate <= dayEnd;
       }).length;
@@ -222,7 +215,7 @@ export default function AdminDashboard() {
         fullDate: day
       };
     });
-  }, [filteredOrders, dateFilter]);
+  }, [orders, dateFilter]);
 
   const dailyProfitData = useMemo(() => {
     const start = startOfDay(new Date(dateFilter.start));
@@ -232,7 +225,7 @@ export default function AdminDashboard() {
     return days.map(day => {
       const dayStart = startOfDay(day);
       const dayEnd = endOfDay(day);
-      const totalProfit = filteredOrders
+      const totalProfit = orders
         .filter(order => {
           const orderDate = new Date(order.createdAt);
           return orderDate >= dayStart && orderDate <= dayEnd;
@@ -245,12 +238,12 @@ export default function AdminDashboard() {
         fullDate: day
       };
     });
-  }, [filteredOrders, dateFilter]);
+  }, [orders, dateFilter]);
 
   const carrierChartData = useMemo(() => {
     const carrierStats: Record<string, number> = {};
     
-    filteredOrders.forEach(order => {
+    orders.forEach(order => {
       if (order.carrier && order.status !== 'Отменен') {
         carrierStats[order.carrier] = (carrierStats[order.carrier] || 0) + 1;
       }
@@ -260,12 +253,26 @@ export default function AdminDashboard() {
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 8);
-  }, [filteredOrders]);
+  }, [orders]);
+
+  const weeklyChartData = useMemo(() => {
+    const dayNames = ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС'];
+    const dayCounts = [0, 0, 0, 0, 0, 0, 0];
+    
+    orders.forEach(order => {
+      const orderDate = new Date(order.createdAt);
+      const dayOfWeek = orderDate.getDay();
+      let index = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+      dayCounts[index]++;
+    });
+    
+    return dayNames.map((name, i) => ({ name, заказы: dayCounts[i] }));
+  }, [orders]);
 
   const topEmployees = useMemo(() => {
     const employeeStats: Record<string, { count: number; totalTimeMs: number; assembled: number }> = {};
     
-    filteredOrders.forEach(o => {
+    orders.forEach(o => {
       const createdBy = o.createdBy || 'Unknown';
       if (!employeeStats[createdBy]) {
         employeeStats[createdBy] = { count: 0, totalTimeMs: 0, assembled: 0 };
@@ -290,9 +297,14 @@ export default function AdminDashboard() {
       }))
       .sort((a, b) => b.orders - a.orders)
       .slice(0, 5);
-  }, [filteredOrders]);
+  }, [orders]);
 
-  if (authLoading || loading) {
+  const handleRefresh = () => {
+    fetchOrders();
+    showToast('Данные обновлены', 'info');
+  };
+
+  if (authLoading || (loading && orders.length === 0)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
         <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
@@ -320,21 +332,30 @@ export default function AdminDashboard() {
             </div>
           </div>
           
-          <div className="flex items-center gap-2 bg-white dark:bg-slate-900 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
-            <Filter className="w-4 h-4 text-slate-400" />
-            <input
-              type="date"
-              value={dateFilter.start}
-              onChange={(e) => setDateFilter({ ...dateFilter, start: e.target.value })}
-              className="text-sm border-none focus:ring-0 outline-none bg-transparent dark:text-white"
-            />
-            <span className="text-slate-400">—</span>
-            <input
-              type="date"
-              value={dateFilter.end}
-              onChange={(e) => setDateFilter({ ...dateFilter, end: e.target.value })}
-              className="text-sm border-none focus:ring-0 outline-none bg-transparent dark:text-white"
-            />
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 bg-white dark:bg-slate-900 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
+              <Filter className="w-4 h-4 text-slate-400" />
+              <input
+                type="date"
+                value={dateFilter.start}
+                onChange={(e) => setDateFilter({ ...dateFilter, start: e.target.value })}
+                className="text-sm border-none focus:ring-0 outline-none bg-transparent dark:text-white"
+              />
+              <span className="text-slate-400">—</span>
+              <input
+                type="date"
+                value={dateFilter.end}
+                onChange={(e) => setDateFilter({ ...dateFilter, end: e.target.value })}
+                className="text-sm border-none focus:ring-0 outline-none bg-transparent dark:text-white"
+              />
+            </div>
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+            >
+              <RefreshCw className={`w-5 h-5 text-slate-600 dark:text-slate-400 ${isRefreshing ? 'animate-spin' : ''}`} />
+            </button>
           </div>
         </header>
 
@@ -352,170 +373,112 @@ export default function AdminDashboard() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
-            <div className="flex items-center justify-between mb-8">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Calendar className="w-5 h-5 text-blue-600" />
-                Заказы по дням недели
-              </h2>
-              <span className="text-xs text-slate-400 font-bold uppercase">
-                {format(new Date(dateFilter.start), 'dd.MM')} - {format(new Date(dateFilter.end), 'dd.MM')}
-              </span>
-            </div>
-            <div className="h-[300px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={weeklyChartData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                  <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }} />
-                  <Bar dataKey="заказы" fill="#2563eb" radius={[8, 8, 0, 0]} barSize={40} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
+          <ChartCard title="Заказы по дням недели" icon={<Calendar className="w-5 h-5 text-blue-600" />}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={weeklyChartData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }} />
+                <Bar dataKey="заказы" fill="#2563eb" radius={[8, 8, 0, 0]} barSize={40} />
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartCard>
 
-          <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
-            <div className="flex items-center justify-between mb-8">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Truck className="w-5 h-5 text-blue-600" />
-                Заказы по ТК
-              </h2>
-              <span className="text-xs text-slate-400 font-bold uppercase">
-                Всего: {stats.totalCount}
-              </span>
-            </div>
-            <div className="h-[300px] w-full">
-              {carrierChartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={carrierChartData}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, percent }) => {
-                        const pct = percent || 0;
-                        return `${name} (${(pct * 100).toFixed(0)}%)`;
-                      }}
-                      outerRadius={100}
-                      fill="#8884d8"
-                      dataKey="value"
-                    >
-                      {carrierChartData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={CARRIER_COLORS[entry.name] || `#${Math.floor(Math.random()*16777215).toString(16)}`} />
-                      ))}
-                    </Pie>
-                    <Tooltip 
-                      formatter={(value: any) => {
-                        const numValue = typeof value === 'number' ? value : 0;
-                        return [`${numValue} заказов`, 'Количество'];
-                      }} 
-                    />
-                    <Legend verticalAlign="bottom" height={36} />
-                  </PieChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="flex items-center justify-center h-full text-slate-400">
-                  Нет данных за выбранный период
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
-            <div className="flex items-center justify-between mb-8">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <TrendingUp className="w-5 h-5 text-emerald-600" />
-                Динамика заказов
-              </h2>
-            </div>
-            <div className="h-[300px] w-full">
+          <ChartCard title="Заказы по ТК" icon={<Truck className="w-5 h-5 text-blue-600" />} subtitle={`Всего: ${stats.totalCount}`}>
+            {carrierChartData.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={dailyOrdersData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                  <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }} />
-                  <Area type="monotone" dataKey="orders" stroke="#10b981" strokeWidth={3} fill="#10b981" fillOpacity={0.2} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
-            <div className="flex items-center justify-between mb-8">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <DollarSign className="w-5 h-5 text-blue-600" />
-                Динамика прибыли (₽)
-              </h2>
-              <span className="text-xs text-slate-400 font-bold uppercase">
-                Всего: {stats.totalProfit.toLocaleString()} ₽
-              </span>
-            </div>
-            <div className="h-[300px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={dailyProfitData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
-                  <YAxis 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tick={{ fill: '#94a3b8', fontSize: 12 }}
-                    tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
-                  />
-                  <Tooltip 
-                    formatter={(value: any) => {
-                      const numValue = typeof value === 'number' ? value : 0;
-                      return [`${numValue.toLocaleString()} ₽`, 'Прибыль'];
+                <PieChart>
+                  <Pie
+                    data={carrierChartData}
+                    cx="50%"
+                    cy="50%"
+                    labelLine={false}
+                    label={({ name, percent }) => {
+                      const pct = percent || 0;
+                      return `${name} (${(pct * 100).toFixed(0)}%)`;
                     }}
-                    contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="profit" 
-                    stroke="#2563eb" 
-                    strokeWidth={3} 
-                    dot={{ r: 4, fill: '#2563eb', strokeWidth: 2, stroke: '#fff' }}
-                    activeDot={{ r: 6 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
-          <div className="flex items-center justify-between mb-8">
-            <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <Users className="w-5 h-5 text-emerald-600" />
-              Эффективность сотрудников
-            </h2>
-            <span className="text-xs text-slate-400 font-bold uppercase">Топ 5</span>
-          </div>
-          <div className="h-[300px] w-full">
-            {topEmployees.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={topEmployees}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
-                  <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                  <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                  <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }} />
-                  <Legend verticalAlign="top" align="right" height={36} iconType="circle" />
-                  <Bar yAxisId="left" dataKey="orders" name="Заказов" fill="#2563eb" radius={[4, 4, 0, 0]} barSize={24} />
-                  <Bar yAxisId="right" dataKey="avgTime" name="Ср. время (мин)" fill="#10b981" radius={[4, 4, 0, 0]} barSize={24} />
-                </BarChart>
+                    outerRadius={100}
+                    fill="#8884d8"
+                    dataKey="value"
+                  >
+                    {carrierChartData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={CARRIER_COLORS[entry.name] || `#${Math.floor(Math.random()*16777215).toString(16)}`} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value: any) => [`${value} заказов`, 'Количество']} />
+                  <Legend verticalAlign="bottom" height={36} />
+                </PieChart>
               </ResponsiveContainer>
             ) : (
               <div className="flex items-center justify-center h-full text-slate-400">
-                Нет данных о сотрудниках
+                Нет данных за выбранный период
               </div>
             )}
-          </div>
+          </ChartCard>
         </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <ChartCard title="Динамика заказов" icon={<TrendingUp className="w-5 h-5 text-emerald-600" />}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={dailyOrdersData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }} />
+                <Area type="monotone" dataKey="orders" stroke="#10b981" strokeWidth={3} fill="#10b981" fillOpacity={0.2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </ChartCard>
+
+          <ChartCard title="Динамика прибыли (₽)" icon={<DollarSign className="w-5 h-5 text-blue-600" />} subtitle={`Всего: ${stats.totalProfit.toLocaleString()} ₽`}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={dailyProfitData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
+                <YAxis 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fill: '#94a3b8', fontSize: 12 }}
+                  tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
+                />
+                <Tooltip 
+                  formatter={(value: any) => [`${value.toLocaleString()} ₽`, 'Прибыль']}
+                  contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}
+                />
+                <Line 
+                  type="monotone" 
+                  dataKey="profit" 
+                  stroke="#2563eb" 
+                  strokeWidth={3} 
+                  dot={{ r: 4, fill: '#2563eb', strokeWidth: 2, stroke: '#fff' }}
+                  activeDot={{ r: 6 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </ChartCard>
+        </div>
+
+        <ChartCard title="Эффективность сотрудников" icon={<Users className="w-5 h-5 text-emerald-600" />} subtitle="Топ 5">
+          {topEmployees.length > 0 ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={topEmployees}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
+                <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }} />
+                <Legend verticalAlign="top" align="right" height={36} iconType="circle" />
+                <Bar yAxisId="left" dataKey="orders" name="Заказов" fill="#2563eb" radius={[4, 4, 0, 0]} barSize={24} />
+                <Bar yAxisId="right" dataKey="avgTime" name="Ср. время (мин)" fill="#10b981" radius={[4, 4, 0, 0]} barSize={24} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex items-center justify-center h-full text-slate-400">
+              Нет данных о сотрудниках
+            </div>
+          )}
+        </ChartCard>
       </div>
     </div>
   );
@@ -549,5 +512,24 @@ function StatCard({ title, value, icon, color, subtitle }: any) {
         {React.cloneElement(icon, { size: 100 })}
       </div>
     </motion.div>
+  );
+}
+
+function ChartCard({ title, icon, subtitle, children }: any) {
+  return (
+    <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
+      <div className="flex items-center justify-between mb-8">
+        <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+          {icon}
+          {title}
+        </h2>
+        {subtitle && (
+          <span className="text-xs text-slate-400 font-bold uppercase">{subtitle}</span>
+        )}
+      </div>
+      <div className="h-[300px] w-full">
+        {children}
+      </div>
+    </div>
   );
 }
