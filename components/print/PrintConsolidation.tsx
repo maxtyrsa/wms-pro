@@ -24,6 +24,8 @@ interface Order {
   profit?: number;
   carrier?: string;
   status?: string;
+  createdBy?: string;  // 
+  payment_sum?: number; // 
 }
 
 interface Consolidation {
@@ -608,7 +610,7 @@ export function PrintConsolidation({
                   <AlertCircle className="w-12 h-12 mx-auto mb-2 text-gray-300" />
                   <p>Нет доступных заказов для добавления</p>
                   <p className="text-xs mt-1">
-                    Доступны только заказы со статусом "Оформлен" и ТК "{consolidation.carrier}"
+                    Доступны только заказы со статусом &quot;Оформлен&quot; и ТК &quot;{consolidation.carrier}&quot;
                   </p>
                 </div>
               ) : (

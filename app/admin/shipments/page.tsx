@@ -183,7 +183,7 @@ export default function AdminShipmentsPage() {
 
   useEffect(() => {
     loadOrders();
-  }, [selectedCarrier]); // Перезагрузка при смене ТК
+  }, [selectedCarrier, loadOrders]);
 
   const toggleOrderSelection = (orderId: string) => {
     const newSelection = new Set(selectedOrders);

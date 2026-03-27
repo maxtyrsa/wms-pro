@@ -37,7 +37,7 @@ export default function ReturnsHistoryPage() {
       return;
     }
     fetchReturnsHistory();
-  }, [role, loading]);
+  }, [role, loading, router]); // Добавлен router
 
   const fetchReturnsHistory = async () => {
     try {

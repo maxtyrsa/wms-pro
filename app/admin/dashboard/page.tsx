@@ -1,7 +1,7 @@
 // app/admin/dashboard/page.tsx
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
 import { 
@@ -131,7 +131,7 @@ export default function AdminDashboard() {
     }
   }, [authLoading, role, router]);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setIsRefreshing(true);
       const start = startOfDay(new Date(dateFilter.start));
@@ -163,11 +163,11 @@ export default function AdminDashboard() {
       setLoading(false);
       setIsRefreshing(false);
     }
-  };
+  }, [dateFilter]);
 
   useEffect(() => {
     fetchData();
-  }, [dateFilter]);
+  }, [dateFilter, fetchData]);
 
   const stats = useMemo(() => {
     const today = startOfDay(new Date());

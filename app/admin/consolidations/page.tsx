@@ -183,7 +183,7 @@ export default function ConsolidationsPage() {
       loadConsolidations();
       fetchAvailableOrders();
     }
-  }, [role, statusFilter]); // Только role и statusFilter
+  }, [role, statusFilter, loadConsolidations, fetchAvailableOrders]); // Добавлены зависимости
 
   // Фильтрация на клиенте (поиск и дата)
   const filteredConsolidations = useMemo(() => {

@@ -34,10 +34,12 @@ export default function LoginPage() {
   }, [user, router]);
 
   useEffect(() => {
-    setCurrentDomain(window.location.origin);
+    // Используем setTimeout для асинхронной установки состояния
     const timer = setTimeout(() => {
+      setCurrentDomain(window.location.origin);
       setIsIframe(window.self !== window.top);
     }, 0);
+    
     return () => clearTimeout(timer);
   }, []);
 
