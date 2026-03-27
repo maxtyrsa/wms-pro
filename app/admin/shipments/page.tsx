@@ -15,7 +15,7 @@ import {
   collection, query, where, orderBy, getDocs,
   startAfter, limit, DocumentSnapshot, QueryConstraint
 } from 'firebase/firestore';
-import { format, startOfDay, endOfDay } from 'date-fns';
+import { format, startOfDay, endOfDay, startOfMonth, endOfMonth } from 'date-fns';
 import { showToast } from '@/components/Toast';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { CreateConsolidationModal } from '@/components/consolidation/CreateConsolidationModal';
@@ -49,8 +49,8 @@ export default function AdminShipmentsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCarrier, setSelectedCarrier] = useState<string>('all');
   const [dateFilter, setDateFilter] = useState<{ start: string; end: string }>({
-    start: format(startOfDay(new Date()), 'yyyy-MM-dd'),
-    end: format(endOfDay(new Date()), 'yyyy-MM-dd'),
+    start: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+    end: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
   });
   const [showDateFilter, setShowDateFilter] = useState(false);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
@@ -219,8 +219,8 @@ export default function AdminShipmentsPage() {
   const clearSearch = () => setSearchQuery('');
   const resetDateFilter = () => {
     setDateFilter({
-      start: format(startOfDay(new Date()), 'yyyy-MM-dd'),
-      end: format(endOfDay(new Date()), 'yyyy-MM-dd'),
+      start: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+      end: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
     });
   };
 

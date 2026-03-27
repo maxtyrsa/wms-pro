@@ -1,7 +1,8 @@
+// components/consolidation/CreateConsolidationModal.tsx
 'use client';
 
 import React, { useState } from 'react';
-import { X, Loader2, CalendarDays, User, Package, Truck, Layers } from 'lucide-react';
+import { X, Loader2, CalendarDays, User, Package, Truck, Layers, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { db } from '@/lib/firebase';
 import { collection, addDoc, doc, writeBatch } from 'firebase/firestore';
@@ -48,7 +49,7 @@ export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSu
   const generateConsolidationNumber = () => {
     const date = new Date();
     const dateStr = format(date, 'yyyy-MM-dd');
-    const random = Math.floor(Math.random() * 100).toString().padStart(2, '0');
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
     return `CON-${dateStr}-${random}`;
   };
 
@@ -129,9 +130,10 @@ export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSu
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            className="relative w-full max-w-2xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl overflow-hidden"
+            className="relative w-full max-w-2xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
           >
-            <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+            {/* Заголовок - фиксированный */}
+            <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shrink-0">
               <div>
                 <h2 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
                   <Layers className="w-6 h-6 text-blue-600" />
@@ -149,92 +151,130 @@ export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSu
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-6 space-y-6">
-              <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl space-y-3">
-                <h3 className="font-semibold text-slate-900 dark:text-white">Параметры партии</h3>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <p className="text-slate-500 dark:text-slate-400">Транспортная компания</p>
-                    <p className="font-semibold text-slate-900 dark:text-white">{mainCarrier === 'mixed' ? 'Разные ТК' : mainCarrier}</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500 dark:text-slate-400">Количество заказов</p>
-                    <p className="font-semibold text-slate-900 dark:text-white">{totalOrders}</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500 dark:text-slate-400">Общий вес</p>
-                    <p className="font-semibold text-slate-900 dark:text-white">{totalWeight.toFixed(1)} кг</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500 dark:text-slate-400">Общий объем</p>
-                    <p className="font-semibold text-slate-900 dark:text-white">{totalVolume.toFixed(4)} м³</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500 dark:text-slate-400">Общая прибыль</p>
-                    <p className="font-semibold text-emerald-600 dark:text-emerald-400">{totalProfit.toLocaleString()} ₽</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    <User className="w-4 h-4 inline mr-1" />
-                    Ответственный сотрудник *
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.responsiblePerson}
-                    onChange={(e) => setFormData({ ...formData, responsiblePerson: e.target.value })}
-                    placeholder="Фамилия И.О."
-                    className="w-full px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    <CalendarDays className="w-4 h-4 inline mr-1" />
-                    Планируемая дата отправки *
-                  </label>
-                  <input
-                    type="date"
-                    value={formData.plannedShipmentDate}
-                    onChange={(e) => setFormData({ ...formData, plannedShipmentDate: e.target.value })}
-                    className="w-full px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Примечания
-                  </label>
-                  <textarea
-                    value={formData.notes}
-                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                    placeholder="Дополнительная информация..."
-                    rows={3}
-                    className="w-full px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
-                  />
-                </div>
-              </div>
-
-              <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
-                <h3 className="font-semibold text-slate-900 dark:text-white mb-3">Входящие заказы</h3>
-                <div className="max-h-48 overflow-y-auto space-y-2">
-                  {selectedOrders.map(order => (
-                    <div key={order.id} className="flex items-center justify-between text-sm p-2 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                      <span className="font-medium text-slate-900 dark:text-white">{order.orderNumber}</span>
-                      <span className="text-slate-500 dark:text-slate-400">{order.quantity} мест</span>
-                      <span className="text-slate-500 dark:text-slate-400">{order.totalWeight} кг</span>
-                      <span className="text-emerald-600 dark:text-emerald-400">{order.profit.toLocaleString()} ₽</span>
+            {/* Содержимое - с прокруткой */}
+            <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto">
+              <div className="p-6 space-y-6">
+                {/* Параметры партии */}
+                <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl space-y-3">
+                  <h3 className="font-semibold text-slate-900 dark:text-white">Параметры партии</h3>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="text-slate-500 dark:text-slate-400">Транспортная компания</p>
+                      <p className="font-semibold text-slate-900 dark:text-white">
+                        {mainCarrier === 'mixed' ? 'Разные ТК' : mainCarrier}
+                      </p>
+                      {mainCarrier === 'mixed' && (
+                        <p className="text-xs text-amber-600 mt-1">
+                          ⚠️ Выбраны заказы с разными ТК
+                        </p>
+                      )}
                     </div>
-                  ))}
+                    <div>
+                      <p className="text-slate-500 dark:text-slate-400">Количество заказов</p>
+                      <p className="font-semibold text-slate-900 dark:text-white">{totalOrders}</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500 dark:text-slate-400">Общий вес</p>
+                      <p className="font-semibold text-slate-900 dark:text-white">{totalWeight.toFixed(1)} кг</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500 dark:text-slate-400">Общий объем</p>
+                      <p className="font-semibold text-slate-900 dark:text-white">{totalVolume.toFixed(4)} м³</p>
+                    </div>
+                    <div className="col-span-2">
+                      <p className="text-slate-500 dark:text-slate-400">Общая прибыль</p>
+                      <p className="font-semibold text-emerald-600 dark:text-emerald-400 text-lg">
+                        {totalProfit.toLocaleString()} ₽
+                      </p>
+                    </div>
+                  </div>
                 </div>
-              </div>
 
-              <div className="flex gap-3 pt-4">
+                {/* Форма */}
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      <User className="w-4 h-4 inline mr-1" />
+                      Ответственный сотрудник *
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.responsiblePerson}
+                      onChange={(e) => setFormData({ ...formData, responsiblePerson: e.target.value })}
+                      placeholder="Фамилия И.О."
+                      className="w-full px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      <CalendarDays className="w-4 h-4 inline mr-1" />
+                      Планируемая дата отправки *
+                    </label>
+                    <input
+                      type="date"
+                      value={formData.plannedShipmentDate}
+                      onChange={(e) => setFormData({ ...formData, plannedShipmentDate: e.target.value })}
+                      className="w-full px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Примечания
+                    </label>
+                    <textarea
+                      value={formData.notes}
+                      onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                      placeholder="Дополнительная информация..."
+                      rows={2}
+                      className="w-full px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Список заказов */}
+                <div>
+                  <h3 className="font-semibold text-slate-900 dark:text-white mb-3">Входящие заказы</h3>
+                  <div className="max-h-48 overflow-y-auto space-y-2 border border-slate-100 dark:border-slate-800 rounded-xl p-2">
+                    {selectedOrders.map(order => (
+                      <div key={order.id} className="flex items-center justify-between text-sm p-2 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                        <span className="font-medium text-slate-900 dark:text-white truncate max-w-[150px]">
+                          {order.orderNumber}
+                        </span>
+                        <span className="text-slate-500 dark:text-slate-400 text-xs">
+                          {order.quantity} мест
+                        </span>
+                        <span className="text-slate-500 dark:text-slate-400 text-xs">
+                          {order.totalWeight} кг
+                        </span>
+                        <span className="text-emerald-600 dark:text-emerald-400 text-xs font-semibold">
+                          {order.profit.toLocaleString()} ₽
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Предупреждение о смешанных ТК */}
+                {mainCarrier === 'mixed' && (
+                  <div className="p-3 bg-amber-50 dark:bg-amber-950/30 rounded-xl flex items-start gap-2">
+                    <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-700 dark:text-amber-300">
+                      Внимание! Вы выбрали заказы с разными транспортными компаниями. 
+                      Консоль будет создана как смешанная, но для отправки рекомендуется 
+                      группировать заказы по одной ТК.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </form>
+
+            {/* Кнопки - фиксированные внизу */}
+            <div className="p-6 border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 shrink-0">
+              <div className="flex gap-3">
                 <button
                   type="button"
                   onClick={onClose}
@@ -244,7 +284,8 @@ export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSu
                 </button>
                 <button
                   type="submit"
-                  disabled={loading}
+                  onClick={handleSubmit}
+                  disabled={loading || !formData.responsiblePerson.trim()}
                   className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {loading ? (
@@ -255,7 +296,7 @@ export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSu
                   Создать консоль
                 </button>
               </div>
-            </form>
+            </div>
           </motion.div>
         </div>
       )}

@@ -1,13 +1,17 @@
+// components/print/PrintConsolidation.tsx - исправленная версия
+
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { 
   Printer, X, Package, Truck, CalendarDays, User, 
-  Edit2, Save, Plus, Minus, Trash2, AlertCircle 
+  Edit2, Save, Plus, Minus, Trash2, AlertCircle, 
+  CheckSquare, Square, Search, XCircle, Layers,
+  Loader2
 } from 'lucide-react';
-import { updateDoc, doc, writeBatch } from 'firebase/firestore';
+import { updateDoc, doc, writeBatch, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { showToast } from '@/components/Toast';
 
@@ -56,7 +60,8 @@ export function PrintConsolidation({
   const printRef = useRef<HTMLDivElement>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [currentOrders, setCurrentOrders] = useState<Order[]>(consolidation.orders);
-  const [selectedOrderId, setSelectedOrderId] = useState<string>('');
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
 
@@ -82,45 +87,94 @@ export function PrintConsolidation({
     return newTotals;
   };
 
-  // Добавление заказа в консоль
-  const handleAddOrder = async () => {
-    if (!selectedOrderId) {
-      showToast('Выберите заказ для добавления', 'error');
+  // Фильтрация доступных заказов (исключаем уже добавленные)
+  const availableForAdd = availableOrders.filter(order => 
+    !currentOrders.some(o => o.id === order.id) && order.carrier === consolidation.carrier
+  );
+
+  // Поиск в доступных заказах
+  const filteredAvailableOrders = availableForAdd.filter(order => {
+    if (!searchQuery.trim()) return true;
+    const queryLower = searchQuery.trim().toLowerCase();
+    return order.orderNumber?.toLowerCase().includes(queryLower);
+  });
+
+  // Выделение заказов для добавления
+  const toggleOrderSelection = (orderId: string) => {
+    const newSelection = new Set(selectedOrderIds);
+    if (newSelection.has(orderId)) {
+      newSelection.delete(orderId);
+    } else {
+      newSelection.add(orderId);
+    }
+    setSelectedOrderIds(newSelection);
+  };
+
+  const toggleAllSelection = () => {
+    if (selectedOrderIds.size === filteredAvailableOrders.length) {
+      setSelectedOrderIds(new Set());
+    } else {
+      setSelectedOrderIds(new Set(filteredAvailableOrders.map(o => o.id)));
+    }
+  };
+
+  // Добавление выбранных заказов
+  const handleAddSelectedOrders = async () => {
+    if (selectedOrderIds.size === 0) {
+      showToast('Выберите заказы для добавления', 'error');
       return;
     }
 
-    const orderToAdd = availableOrders.find(o => o.id === selectedOrderId);
-    if (!orderToAdd) return;
-
-    // Проверяем, не добавлен ли уже заказ
-    if (currentOrders.some(o => o.id === orderToAdd.id)) {
-      showToast('Этот заказ уже добавлен в консоль', 'error');
-      return;
-    }
+    const ordersToAdd = availableForAdd.filter(o => selectedOrderIds.has(o.id));
+    if (ordersToAdd.length === 0) return;
 
     setLoading(true);
     try {
-      const newOrders = [...currentOrders, orderToAdd];
+      const newOrders = [...currentOrders, ...ordersToAdd];
       const newTotals = updateTotals(newOrders);
       
       // Обновляем в Firebase
       const consolidationRef = doc(db, 'consolidations', consolidation.id);
       await updateDoc(consolidationRef, {
-        orders: newOrders,
+        orders: newOrders.map(o => ({
+          id: o.id,
+          orderNumber: o.orderNumber,
+          quantity: o.quantity,
+          totalWeight: o.totalWeight,
+          totalVolume: o.totalVolume,
+          createdBy: o.createdBy,
+          payment_sum: (o as any).payment_sum,
+          profit: o.profit
+        })),
         totalOrders: newTotals.totalOrders,
         totalWeight: newTotals.totalWeight,
         totalVolume: newTotals.totalVolume,
-        totalProfit: newTotals.totalProfit
+        totalProfit: newTotals.totalProfit,
+        updatedAt: new Date().toISOString()
       });
 
+      // Обновляем статусы заказов
+      const batch = writeBatch(db);
+      ordersToAdd.forEach(order => {
+        const orderRef = doc(db, 'orders', order.id);
+        batch.update(orderRef, {
+          status: 'В консолидации',
+          consolidationId: consolidation.id,
+          consolidatedAt: new Date().toISOString()
+        });
+      });
+      await batch.commit();
+
       setCurrentOrders(newOrders);
-      setSelectedOrderId('');
+      setSelectedOrderIds(new Set());
+      setSearchQuery('');
       setShowAddModal(false);
-      showToast('Заказ добавлен в консоль', 'success');
+      
+      showToast(`✅ Добавлено ${ordersToAdd.length} заказов в консоль`, 'success');
       onUpdate();
     } catch (error) {
-      console.error('Error adding order to consolidation:', error);
-      showToast('Ошибка при добавлении заказа', 'error');
+      console.error('Error adding orders to consolidation:', error);
+      showToast('Ошибка при добавлении заказов', 'error');
     } finally {
       setLoading(false);
     }
@@ -132,6 +186,9 @@ export function PrintConsolidation({
 
     setLoading(true);
     try {
+      const orderToRemove = currentOrders.find(o => o.id === orderId);
+      if (!orderToRemove) return;
+
       const newOrders = currentOrders.filter(o => o.id !== orderId);
       const newTotals = updateTotals(newOrders);
       
@@ -142,7 +199,15 @@ export function PrintConsolidation({
         totalOrders: newTotals.totalOrders,
         totalWeight: newTotals.totalWeight,
         totalVolume: newTotals.totalVolume,
-        totalProfit: newTotals.totalProfit
+        totalProfit: newTotals.totalProfit,
+        updatedAt: new Date().toISOString()
+      });
+
+      // Возвращаем заказ в статус "Оформлен"
+      const orderRef = doc(db, 'orders', orderId);
+      await updateDoc(orderRef, {
+        status: 'Оформлен',
+        consolidationId: null
       });
 
       setCurrentOrders(newOrders);
@@ -166,7 +231,8 @@ export function PrintConsolidation({
         totalOrders: totals.totalOrders,
         totalWeight: totals.totalWeight,
         totalVolume: totals.totalVolume,
-        totalProfit: totals.totalProfit
+        totalProfit: totals.totalProfit,
+        updatedAt: new Date().toISOString()
       });
 
       setIsEditing(false);
@@ -415,7 +481,7 @@ export function PrintConsolidation({
                         className="flex items-center gap-1 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium"
                       >
                         <Plus className="w-3 h-3" />
-                        Добавить заказ
+                        Добавить заказы
                       </button>
                     )}
                   </div>
@@ -502,45 +568,131 @@ export function PrintConsolidation({
         </div>
       </div>
 
-      {/* Модальное окно добавления заказа */}
+      {/* Модальное окно добавления заказов (обновленное) */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[60]">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
             <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-              <h3 className="font-bold text-gray-900">Добавить заказ в консоль</h3>
-              <button onClick={() => setShowAddModal(false)} className="p-1 hover:bg-gray-100 rounded">
+              <div>
+                <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-blue-600" />
+                  Добавить заказы в консоль
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  Выберите заказы для добавления в {consolidation.consolidationNumber}
+                </p>
+              </div>
+              <button 
+                onClick={() => setShowAddModal(false)} 
+                className="p-1 hover:bg-gray-100 rounded"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-4 space-y-4">
-              {availableOrders.length === 0 ? (
+            
+            <div className="p-4 space-y-4 flex-1 overflow-auto">
+              {/* Поиск */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Поиск по номеру заказа..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              
+              {filteredAvailableOrders.length === 0 ? (
                 <div className="text-center py-8 text-gray-500">
                   <AlertCircle className="w-12 h-12 mx-auto mb-2 text-gray-300" />
                   <p>Нет доступных заказов для добавления</p>
+                  <p className="text-xs mt-1">
+                    Доступны только заказы со статусом "Оформлен" и ТК "{consolidation.carrier}"
+                  </p>
                 </div>
               ) : (
                 <>
-                  <select
-                    value={selectedOrderId}
-                    onChange={(e) => setSelectedOrderId(e.target.value)}
-                    className="w-full p-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
-                  >
-                    <option value="">Выберите заказ</option>
-                    {availableOrders.map(order => (
-                      <option key={order.id} value={order.id}>
-                        {order.orderNumber || order.id.slice(-6)} - {order.carrier}
-                      </option>
+                  {/* Выделение всех */}
+                  <div className="flex items-center justify-between pb-2 border-b border-gray-100">
+                    <button
+                      onClick={toggleAllSelection}
+                      className="flex items-center gap-2 text-sm text-gray-600 hover:text-blue-600"
+                    >
+                      {selectedOrderIds.size === filteredAvailableOrders.length ? (
+                        <CheckSquare className="w-4 h-4" />
+                      ) : (
+                        <Square className="w-4 h-4" />
+                      )}
+                      {selectedOrderIds.size === filteredAvailableOrders.length ? 'Снять все' : 'Выбрать все'}
+                    </button>
+                    <span className="text-xs text-gray-500">
+                      Выбрано: <b>{selectedOrderIds.size}</b> из {filteredAvailableOrders.length}
+                    </span>
+                  </div>
+                  
+                  {/* Список заказов */}
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {filteredAvailableOrders.map(order => (
+                      <div
+                        key={order.id}
+                        onClick={() => toggleOrderSelection(order.id)}
+                        className={`p-3 rounded-lg border cursor-pointer transition-all ${
+                          selectedOrderIds.has(order.id)
+                            ? 'bg-blue-50 border-blue-300'
+                            : 'bg-white border-gray-200 hover:border-blue-200'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={selectedOrderIds.has(order.id)}
+                            onChange={() => {}}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-4 h-4 rounded border-gray-300"
+                          />
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-gray-900">
+                                Заказ №{order.orderNumber || order.id.slice(-6)}
+                              </span>
+                              <span className="px-2 py-0.5 rounded text-xs bg-green-100 text-green-700">
+                                {order.carrier}
+                              </span>
+                            </div>
+                            <div className="flex gap-4 mt-1 text-xs text-gray-500">
+                              <span>Мест: {order.quantity || 1}</span>
+                              <span>Вес: {order.totalWeight?.toFixed(1) || 0} кг</span>
+                              <span>Прибыль: {(order.profit || 0).toLocaleString()} ₽</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     ))}
-                  </select>
-                  <button
-                    onClick={handleAddOrder}
-                    disabled={loading || !selectedOrderId}
-                    className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium disabled:opacity-50"
-                  >
-                    {loading ? 'Добавление...' : 'Добавить'}
-                  </button>
+                  </div>
                 </>
               )}
+            </div>
+            
+            <div className="p-4 border-t border-gray-200 flex gap-3">
+              <button
+                onClick={() => setShowAddModal(false)}
+                className="flex-1 py-3 border border-gray-200 rounded-xl text-gray-700 font-medium hover:bg-gray-50 transition-colors"
+              >
+                Отмена
+              </button>
+              <button
+                onClick={handleAddSelectedOrders}
+                disabled={loading || selectedOrderIds.size === 0}
+                className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {loading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Plus className="w-4 h-4" />
+                )}
+                Добавить выбранные ({selectedOrderIds.size})
+              </button>
             </div>
           </div>
         </div>

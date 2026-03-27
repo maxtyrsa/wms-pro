@@ -1,5 +1,4 @@
-import type { NextConfig } from 'next';
-
+// next.config.ts
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   eslint: {
@@ -33,13 +32,10 @@ const nextConfig: NextConfig = {
     }
     return config;
   },
-  // Отключаем сборку типов
-  swcMinify: true,
+  // swcMinify: true, // ← УДАЛИТЬ эту строку (в Next.js 15 по умолчанию)
   compiler: {
     removeConsole: process.env.NODE_ENV === 'production' ? {
       exclude: ['error', 'warn'],
     } : false,
   },
 };
-
-export default nextConfig;

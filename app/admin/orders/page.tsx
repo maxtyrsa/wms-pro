@@ -19,7 +19,7 @@ import {
   limit,
   DocumentSnapshot
 } from 'firebase/firestore';
-import { format, startOfDay, endOfDay } from 'date-fns';
+import { format, startOfDay, endOfDay, startOfMonth, endOfMonth } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
 import { useRouter } from 'next/navigation';
 import { 
@@ -216,8 +216,8 @@ export default function AdminOrdersPage() {
   
   // Состояние фильтров
   const [filters, setFilters] = useState<Filters>({
-    startDate: format(startOfDay(new Date()), 'yyyy-MM-dd'),
-    endDate: format(endOfDay(new Date()), 'yyyy-MM-dd'),
+    startDate: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+    endDate: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
     carrier: 'Все',
     status: 'Все',
     searchQuery: '',
@@ -274,8 +274,8 @@ export default function AdminOrdersPage() {
   const resetDateFilter = () => {
     setFilters(prev => ({
       ...prev,
-      startDate: format(startOfDay(new Date()), 'yyyy-MM-dd'),
-      endDate: format(endOfDay(new Date()), 'yyyy-MM-dd'),
+      startDate: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+      endDate: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
     }));
   };
 
