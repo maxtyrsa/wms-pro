@@ -47,10 +47,11 @@ import {
   DollarSign,
   RefreshCw,
   AlertTriangle,
-  Activity
+  Activity,
+  BarChart3
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { format, startOfDay, endOfDay, eachDayOfInterval, isWithinInterval } from 'date-fns';
+import { format, startOfDay, endOfDay, eachDayOfInterval, isWithinInterval, startOfWeek, endOfWeek } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { showToast } from '@/components/Toast';
 
@@ -91,6 +92,8 @@ const CARRIER_COLORS: Record<string, string> = {
   'WB_FBO': '#c084fc',
 };
 
+// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+
 const getTimeMs = (time: any): number => {
   if (!time) return 0;
   if (typeof time.toDate === 'function') {
@@ -105,10 +108,24 @@ const getTimeMs = (time: any): number => {
   return 0;
 };
 
+const getDayOfWeek = (date: any): number => {
+  const d = new Date(date);
+  return d.getDay(); // 0 = воскресенье, 1 = понедельник, ..., 6 = суббота
+};
+
 const getHour = (date: any): number => {
   const d = new Date(date);
   return d.getHours();
 };
+
+const DAY_NAMES = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+
+const getDayName = (dayIndex: number): string => {
+  const names = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
+  return names[dayIndex];
+};
+
+// ========== КОМПОНЕНТ ==========
 
 export default function AdminDashboard() {
   const { role, loading: authLoading } = useAuth();
@@ -167,8 +184,9 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     fetchData();
-  }, [dateFilter, fetchData]);
+  }, [fetchData]);
 
+  // Основная статистика
   const stats = useMemo(() => {
     const today = startOfDay(new Date());
     const ordersToday = orders.filter(o => new Date(o.createdAt) >= today);
@@ -212,6 +230,23 @@ export default function AdminDashboard() {
     };
   }, [orders]);
 
+  // Данные по дням недели
+  const weeklyData = useMemo(() => {
+    const dayCounts = [0, 0, 0, 0, 0, 0, 0];
+    
+    orders.forEach(order => {
+      const dayOfWeek = getDayOfWeek(order.createdAt);
+      dayCounts[dayOfWeek]++;
+    });
+    
+    return DAY_NAMES.map((name, index) => ({
+      name,
+      orders: dayCounts[index],
+      fullName: getDayName(index)
+    }));
+  }, [orders]);
+
+  // Данные по часам для времени сборки
   const hourlyData = useMemo(() => {
     const hours = Array.from({ length: 24 }, (_, i) => ({
       hour: i,
@@ -253,6 +288,7 @@ export default function AdminDashboard() {
     return hours;
   }, [orders]);
 
+  // KPI ошибок
   const jambData = useMemo(() => {
     const dailyJambs: Record<string, { total: number; bySeverity: Record<string, number> }> = {};
     
@@ -290,6 +326,7 @@ export default function AdminDashboard() {
     });
   }, [jambs, dateFilter]);
 
+  // Данные по ТК
   const carrierChartData = useMemo(() => {
     const carrierStats: Record<string, number> = {};
     orders.forEach(order => {
@@ -300,6 +337,7 @@ export default function AdminDashboard() {
     return Object.entries(carrierStats).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, 8);
   }, [orders]);
 
+  // KPI сотрудников
   const employeeKPI = useMemo(() => {
     const employeeStats: Record<string, { orders: number; totalTimeMs: number; assembled: number; jambs: number; jambSeverityScore: number; profit: number }> = {};
     
@@ -371,6 +409,7 @@ export default function AdminDashboard() {
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-4 md:p-8">
       <div className="max-w-7xl mx-auto space-y-8">
+        {/* Header */}
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             <button onClick={() => router.back()} className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-full transition-colors">
@@ -403,6 +442,7 @@ export default function AdminDashboard() {
           </div>
         </header>
 
+        {/* Основные метрики */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
           <StatCard title="Заказов за период" value={stats.totalCount} icon={<Package className="w-6 h-6" />} color="blue" subtitle={`${stats.todayCount} сегодня`} />
           <StatCard title="Ср. время сборки" value={stats.avgTime} icon={<Clock className="w-6 h-6" />} color="emerald" subtitle={`${stats.assembledCount} заказов`} />
@@ -410,15 +450,19 @@ export default function AdminDashboard() {
           <StatCard title="Ошибки (JAMBS)" value={totalJambs} icon={<AlertTriangle className="w-6 h-6" />} color="red" subtitle={`Critical: ${criticalJambs}, High: ${highJambs}`} />
         </div>
 
+        {/* Графики: Заказы по дням недели и Время сборки по часам */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <ChartCard title="Заказы по часам дня" icon={<Activity className="w-5 h-5 text-blue-600" />}>
+          <ChartCard title="Заказы по дням недели" icon={<BarChart3 className="w-5 h-5 text-blue-600" />}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={hourlyData}>
+              <BarChart data={weeklyData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11 }} interval={3} />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
                 <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }} />
-                <Bar dataKey="orders" fill="#2563eb" radius={[4, 4, 0, 0]} />
+                <Tooltip 
+                  contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}
+                  formatter={(value: any, name: any, props: any) => [`${value} заказов`, props.payload.fullName]}
+                />
+                <Bar dataKey="orders" fill="#2563eb" radius={[8, 8, 0, 0]} barSize={50} />
               </BarChart>
             </ResponsiveContainer>
           </ChartCard>
@@ -433,9 +477,13 @@ export default function AdminDashboard() {
                 <Line type="monotone" dataKey="avgAssemblyTime" stroke="#10b981" strokeWidth={3} dot={{ r: 4, fill: '#10b981' }} />
               </LineChart>
             </ResponsiveContainer>
+            <div className="text-center text-xs text-slate-400 mt-2">
+              Показаны часы с выполненными заказами
+            </div>
           </ChartCard>
         </div>
 
+        {/* KPI ошибок */}
         <ChartCard title="KPI ошибок (JAMBS)" icon={<AlertTriangle className="w-5 h-5 text-red-500" />}>
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={jambData}>
@@ -454,6 +502,7 @@ export default function AdminDashboard() {
           </ResponsiveContainer>
         </ChartCard>
 
+        {/* Эффективность сотрудников */}
         <ChartCard title="Эффективность сотрудников (KPI)" icon={<Users className="w-5 h-5 text-emerald-600" />}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={employeeKPI} layout="vertical" margin={{ left: 80 }}>
@@ -473,6 +522,7 @@ export default function AdminDashboard() {
           </ResponsiveContainer>
         </ChartCard>
 
+        {/* Динамика заказов и распределение по ТК */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <ChartCard title="Динамика заказов" icon={<TrendingUp className="w-5 h-5 text-emerald-600" />}>
             <ResponsiveContainer width="100%" height="100%">
@@ -505,6 +555,7 @@ export default function AdminDashboard() {
   );
 }
 
+// Компонент карточки статистики
 function StatCard({ title, value, icon, color, subtitle }: any) {
   const colors: any = {
     blue: 'bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-400',
@@ -524,6 +575,7 @@ function StatCard({ title, value, icon, color, subtitle }: any) {
   );
 }
 
+// Компонент карточки графика
 function ChartCard({ title, icon, subtitle, children }: any) {
   return (
     <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
