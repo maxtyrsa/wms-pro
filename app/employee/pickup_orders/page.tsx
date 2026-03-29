@@ -1,3 +1,4 @@
+// app/employee/pickup_orders/page.tsx
 'use client';
 
 import React from 'react';
@@ -36,6 +37,7 @@ export default function EmployeePickupOrdersPage() {
       </header>
 
       <main className="max-w-3xl mx-auto p-4">
+        {/* isAdmin={false} - но кнопка выдачи будет доступна */}
         <PickupOrdersList isAdmin={false} />
       </main>
     </div>
