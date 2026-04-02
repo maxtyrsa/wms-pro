@@ -7,9 +7,9 @@ import { useRouter } from 'next/navigation';
 import { 
   collection, 
   query, 
-  getDocs,
+  where,
   orderBy,
-  where
+  getDocs
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { getCurrentMonthRange } from '@/lib/dateUtils';
@@ -42,16 +42,14 @@ import {
   Loader2,
   Calendar,
   ArrowLeft,
-  Filter,
   Truck,
   DollarSign,
   RefreshCw,
   AlertTriangle,
-  Activity,
   BarChart3
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { format, startOfDay, endOfDay, eachDayOfInterval, isWithinInterval, startOfWeek, endOfWeek } from 'date-fns';
+import { format, startOfDay, endOfDay, eachDayOfInterval, isValid } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { showToast } from '@/components/Toast';
 
@@ -100,7 +98,8 @@ const getTimeMs = (time: any): number => {
     return time.toDate().getTime();
   }
   if (typeof time === 'string') {
-    return new Date(time).getTime();
+    const date = new Date(time);
+    return isValid(date) ? date.getTime() : 0;
   }
   if (typeof time === 'number') {
     return time;
@@ -110,12 +109,12 @@ const getTimeMs = (time: any): number => {
 
 const getDayOfWeek = (date: any): number => {
   const d = new Date(date);
-  return d.getDay(); // 0 = воскресенье, 1 = понедельник, ..., 6 = суббота
+  return isValid(d) ? d.getDay() : 0;
 };
 
 const getHour = (date: any): number => {
   const d = new Date(date);
-  return d.getHours();
+  return isValid(d) ? d.getHours() : 0;
 };
 
 const DAY_NAMES = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
@@ -123,6 +122,13 @@ const DAY_NAMES = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 const getDayName = (dayIndex: number): string => {
   const names = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
   return names[dayIndex];
+};
+
+// Функция для безопасного форматирования даты
+const safeFormatDate = (date: any, formatStr: string): string => {
+  if (!date) return '—';
+  const d = new Date(date);
+  return isValid(d) ? format(d, formatStr, { locale: ru }) : '—';
 };
 
 // ========== КОМПОНЕНТ ==========
@@ -134,13 +140,15 @@ export default function AdminDashboard() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [jambs, setJambs] = useState<Jamb[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
+  const [error, setError] = useState<string | null>(null);
   
   const currentMonth = getCurrentMonthRange();
   const [dateFilter, setDateFilter] = useState<{ start: string; end: string }>({
     start: currentMonth.start,
     end: currentMonth.end,
   });
-  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
     if (!authLoading && role !== 'admin') {
@@ -148,12 +156,24 @@ export default function AdminDashboard() {
     }
   }, [authLoading, role, router]);
 
-  const fetchData = useCallback(async () => {
+  // Функция для загрузки данных
+  const loadData = useCallback(async () => {
     try {
-      setIsRefreshing(true);
-      const start = startOfDay(new Date(dateFilter.start));
-      const end = endOfDay(new Date(dateFilter.end));
+      setLoading(true);
+      setError(null);
       
+      // Проверяем валидность дат
+      const startDate = new Date(dateFilter.start);
+      const endDate = new Date(dateFilter.end);
+      
+      if (!isValid(startDate) || !isValid(endDate)) {
+        throw new Error('Неверный формат даты');
+      }
+      
+      const start = startOfDay(startDate);
+      const end = endOfDay(endDate);
+      
+      // Загружаем заказы
       const ordersQuery = query(
         collection(db, 'orders'),
         where('createdAt', '>=', start.toISOString()),
@@ -164,6 +184,7 @@ export default function AdminDashboard() {
       const ordersData = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
       setOrders(ordersData);
       
+      // Загружаем ошибки
       const jambsQuery = query(
         collection(db, 'jambs'),
         where('createdAt', '>=', start.toISOString()),
@@ -173,23 +194,38 @@ export default function AdminDashboard() {
       const jambsData = jambsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Jamb));
       setJambs(jambsData);
       
-    } catch (error) {
-      console.error('Error fetching data:', error);
+      setLastUpdate(new Date());
+    } catch (err: any) {
+      console.error('Error loading data:', err);
+      setError(err.message || 'Ошибка загрузки данных');
       showToast('Ошибка при загрузке данных', 'error');
     } finally {
       setLoading(false);
-      setIsRefreshing(false);
     }
   }, [dateFilter]);
 
+  // Загружаем данные при изменении фильтра
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    loadData();
+  }, [loadData]);
+
+  // Валидация дат при изменении
+  const handleDateChange = (type: 'start' | 'end', value: string) => {
+    const newDate = new Date(value);
+    if (isValid(newDate)) {
+      setDateFilter(prev => ({ ...prev, [type]: value }));
+    } else {
+      showToast('Введите корректную дату', 'error');
+    }
+  };
 
   // Основная статистика
   const stats = useMemo(() => {
     const today = startOfDay(new Date());
-    const ordersToday = orders.filter(o => new Date(o.createdAt) >= today);
+    const ordersToday = orders.filter(o => {
+      const orderDate = new Date(o.createdAt);
+      return isValid(orderDate) && orderDate >= today;
+    });
     
     let totalWeight = 0, totalVolume = 0, totalAssemblySeconds = 0, assembledCount = 0;
     let totalPaymentSum = 0, totalDeliveryCost = 0, totalProfit = 0;
@@ -236,7 +272,9 @@ export default function AdminDashboard() {
     
     orders.forEach(order => {
       const dayOfWeek = getDayOfWeek(order.createdAt);
-      dayCounts[dayOfWeek]++;
+      if (dayOfWeek >= 0 && dayOfWeek < 7) {
+        dayCounts[dayOfWeek]++;
+      }
     });
     
     return DAY_NAMES.map((name, index) => ({
@@ -293,7 +331,10 @@ export default function AdminDashboard() {
     const dailyJambs: Record<string, { total: number; bySeverity: Record<string, number> }> = {};
     
     jambs.forEach(jamb => {
-      const date = format(new Date(jamb.createdAt), 'yyyy-MM-dd');
+      const jambDate = new Date(jamb.createdAt);
+      if (!isValid(jambDate)) return;
+      
+      const date = format(jambDate, 'yyyy-MM-dd');
       if (!dailyJambs[date]) {
         dailyJambs[date] = { total: 0, bySeverity: { Critical: 0, High: 0, Medium: 0, Low: 0 } };
       }
@@ -301,9 +342,14 @@ export default function AdminDashboard() {
       dailyJambs[date].bySeverity[jamb.severity]++;
     });
     
-    const start = startOfDay(new Date(dateFilter.start));
-    const end = endOfDay(new Date(dateFilter.end));
-    const days = eachDayOfInterval({ start, end });
+    const start = new Date(dateFilter.start);
+    const end = new Date(dateFilter.end);
+    
+    if (!isValid(start) || !isValid(end)) return [];
+    
+    const startDay = startOfDay(start);
+    const endDay = endOfDay(end);
+    const days = eachDayOfInterval({ start: startDay, end: endDay });
     
     return days.map(day => {
       const dateStr = format(day, 'yyyy-MM-dd');
@@ -339,12 +385,22 @@ export default function AdminDashboard() {
 
   // KPI сотрудников
   const employeeKPI = useMemo(() => {
-    const employeeStats: Record<string, { orders: number; totalTimeMs: number; assembled: number; jambs: number; jambSeverityScore: number; profit: number }> = {};
+    const employeeStats: Record<string, { 
+      orders: number; 
+      totalTimeMs: number; 
+      assembled: number; 
+      jambs: number; 
+      jambSeverityScore: number; 
+      profit: number;
+      lastJambDate?: string;
+    }> = {};
     
     orders.forEach(order => {
       const createdBy = order.createdBy || 'Unknown';
       if (!employeeStats[createdBy]) {
-        employeeStats[createdBy] = { orders: 0, totalTimeMs: 0, assembled: 0, jambs: 0, jambSeverityScore: 0, profit: 0 };
+        employeeStats[createdBy] = { 
+          orders: 0, totalTimeMs: 0, assembled: 0, jambs: 0, jambSeverityScore: 0, profit: 0 
+        };
       }
       employeeStats[createdBy].orders++;
       employeeStats[createdBy].profit += order.profit || 0;
@@ -365,43 +421,89 @@ export default function AdminDashboard() {
       if (employeeStats[email]) {
         employeeStats[email].jambs++;
         employeeStats[email].jambSeverityScore += severityWeight[jamb.severity];
+        employeeStats[email].lastJambDate = jamb.createdAt;
       } else {
         employeeStats[email] = {
           orders: 0, totalTimeMs: 0, assembled: 0, jambs: 1,
           jambSeverityScore: severityWeight[jamb.severity],
-          profit: 0
+          profit: 0,
+          lastJambDate: jamb.createdAt
         };
       }
     });
     
-    return Object.entries(employeeStats).map(([email, s]) => {
-      const avgTimeSec = s.assembled > 0 ? Math.round(s.totalTimeMs / s.assembled / 1000) : 0;
-      const avgTimeMin = Math.floor(avgTimeSec / 60);
-      const avgTimeSecRem = avgTimeSec % 60;
-      const kpiScore = Math.max(0, Math.min(100,
-        (s.orders * 10) - (s.jambs * 5) - (s.jambSeverityScore * 2) - (avgTimeSec / 60) + (s.profit / 5000)
-      ));
-      
-      return {
-        name: email.split('@')[0],
-        orders: s.orders,
-        avgTime: avgTimeSec,
-        avgTimeDisplay: `${avgTimeMin.toString().padStart(2, '0')}:${avgTimeSecRem.toString().padStart(2, '0')}`,
-        jambs: s.jambs,
-        profit: s.profit,
-        kpiScore: Math.round(kpiScore)
-      };
-    }).sort((a, b) => b.kpiScore - a.kpiScore);
+    const result = Object.entries(employeeStats)
+      .map(([email, s]) => {
+        const avgTimeSec = s.assembled > 0 ? Math.round(s.totalTimeMs / s.assembled / 1000) : 0;
+        const avgTimeMin = Math.floor(avgTimeSec / 60);
+        const avgTimeSecRem = avgTimeSec % 60;
+        
+        const jambPenalty = (s.jambs * 5) + (s.jambSeverityScore * 2);
+        
+        let kpiScore = (s.orders * 10) - jambPenalty - (avgTimeSec / 60) + (s.profit / 5000);
+        kpiScore = Math.max(0, Math.min(100, kpiScore));
+        
+        let efficiencyLevel = 'Низкая';
+        if (kpiScore >= 80) efficiencyLevel = 'Высокая';
+        else if (kpiScore >= 60) efficiencyLevel = 'Средняя';
+        else if (kpiScore >= 40) efficiencyLevel = 'Ниже среднего';
+        
+        return {
+          name: email.split('@')[0],
+          email,
+          orders: s.orders,
+          avgTime: avgTimeSec,
+          avgTimeDisplay: `${avgTimeMin.toString().padStart(2, '0')}:${avgTimeSecRem.toString().padStart(2, '0')}`,
+          jambs: s.jambs,
+          jambScore: s.jambSeverityScore,
+          profit: s.profit,
+          kpiScore: Math.round(kpiScore),
+          efficiency: efficiencyLevel,
+          lastJambDate: s.lastJambDate ? safeFormatDate(s.lastJambDate, 'dd.MM.yyyy HH:mm') : null
+        };
+      })
+      .sort((a, b) => b.kpiScore - a.kpiScore);
+    
+    return result;
   }, [orders, jambs]);
 
   const totalJambs = jambs.length;
   const criticalJambs = jambs.filter(j => j.severity === 'Critical').length;
   const highJambs = jambs.filter(j => j.severity === 'High').length;
 
-  if (authLoading || (loading && orders.length === 0)) {
+  const handleRefresh = () => {
+    setIsRefreshing(true);
+    loadData().finally(() => setIsRefreshing(false));
+  };
+
+  const handleSetCurrentMonth = () => {
+    const month = getCurrentMonthRange();
+    setDateFilter({ start: month.start, end: month.end });
+    showToast('Установлен текущий месяц', 'info');
+  };
+
+  if (authLoading || loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
         <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-8">
+        <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-2xl p-6 max-w-md text-center">
+          <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-red-700 dark:text-red-300 mb-2">Ошибка загрузки данных</h2>
+          <p className="text-red-600 dark:text-red-400 mb-4">{error}</p>
+          <button 
+            onClick={handleRefresh}
+            className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+          >
+            Повторить попытку
+          </button>
+        </div>
       </div>
     );
   }
@@ -421,7 +523,10 @@ export default function AdminDashboard() {
                 Панель управления
               </h1>
               <p className="text-slate-500 dark:text-slate-400">
-                Статистика склада за {format(new Date(dateFilter.start), 'MMMM yyyy', { locale: ru })}
+                Статистика склада за {safeFormatDate(dateFilter.start, 'MMMM yyyy')}
+              </p>
+              <p className="text-xs text-slate-400">
+                {orders.length} заказов, {jambs.length} ошибок • Обновлено: {format(lastUpdate, 'HH:mm:ss')}
               </p>
             </div>
           </div>
@@ -429,127 +534,210 @@ export default function AdminDashboard() {
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 bg-white dark:bg-slate-900 px-4 py-2 rounded-xl border border-slate-200 shadow-sm">
               <Calendar className="w-4 h-4 text-slate-400" />
-              <input type="date" value={dateFilter.start} onChange={(e) => setDateFilter({ ...dateFilter, start: e.target.value })} className="text-sm border-none focus:ring-0 outline-none bg-transparent dark:text-white" />
+              <input 
+                type="date" 
+                value={dateFilter.start} 
+                onChange={(e) => handleDateChange('start', e.target.value)}
+                className="text-sm border-none focus:ring-0 outline-none bg-transparent dark:text-white cursor-pointer"
+              />
               <span className="text-slate-400">—</span>
-              <input type="date" value={dateFilter.end} onChange={(e) => setDateFilter({ ...dateFilter, end: e.target.value })} className="text-sm border-none focus:ring-0 outline-none bg-transparent dark:text-white" />
+              <input 
+                type="date" 
+                value={dateFilter.end} 
+                onChange={(e) => handleDateChange('end', e.target.value)}
+                className="text-sm border-none focus:ring-0 outline-none bg-transparent dark:text-white cursor-pointer"
+              />
             </div>
-            <button onClick={() => { setDateFilter(getCurrentMonthRange()); showToast('Установлен текущий месяц', 'info'); }} className="px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 rounded-xl hover:bg-slate-200 transition-colors">
+            <button 
+              onClick={handleSetCurrentMonth} 
+              className="px-3 py-2 text-sm bg-slate-100 dark:bg-slate-800 rounded-xl hover:bg-slate-200 transition-colors"
+            >
               Текущий месяц
             </button>
-            <button onClick={fetchData} disabled={isRefreshing} className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 hover:bg-slate-50 transition-colors">
+            <button 
+              onClick={handleRefresh} 
+              disabled={isRefreshing} 
+              className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 hover:bg-slate-50 transition-colors"
+            >
               <RefreshCw className={`w-5 h-5 text-slate-600 ${isRefreshing ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </header>
 
-        {/* Основные метрики */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          <StatCard title="Заказов за период" value={stats.totalCount} icon={<Package className="w-6 h-6" />} color="blue" subtitle={`${stats.todayCount} сегодня`} />
-          <StatCard title="Ср. время сборки" value={stats.avgTime} icon={<Clock className="w-6 h-6" />} color="emerald" subtitle={`${stats.assembledCount} заказов`} />
-          <StatCard title="Общая прибыль" value={`${stats.totalProfit.toLocaleString()} ₽`} icon={<TrendingUp className="w-6 h-6" />} color="green" />
-          <StatCard title="Ошибки (JAMBS)" value={totalJambs} icon={<AlertTriangle className="w-6 h-6" />} color="red" subtitle={`Critical: ${criticalJambs}, High: ${highJambs}`} />
-        </div>
-
-        {/* Графики: Заказы по дням недели и Время сборки по часам */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <ChartCard title="Заказы по дням недели" icon={<BarChart3 className="w-5 h-5 text-blue-600" />}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={weeklyData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}
-                  formatter={(value: any, name: any, props: any) => [`${value} заказов`, props.payload.fullName]}
-                />
-                <Bar dataKey="orders" fill="#2563eb" radius={[8, 8, 0, 0]} barSize={50} />
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartCard>
-
-          <ChartCard title="Среднее время сборки по часам" icon={<Clock className="w-5 h-5 text-emerald-600" />}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={hourlyData.filter(h => h.assembledCount > 0)}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11 }} interval={2} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                <Tooltip formatter={(value: any, name: any, props: any) => [props.payload.avgAssemblyTimeDisplay, 'Среднее время']} />
-                <Line type="monotone" dataKey="avgAssemblyTime" stroke="#10b981" strokeWidth={3} dot={{ r: 4, fill: '#10b981' }} />
-              </LineChart>
-            </ResponsiveContainer>
-            <div className="text-center text-xs text-slate-400 mt-2">
-              Показаны часы с выполненными заказами
+        {orders.length === 0 && jambs.length === 0 ? (
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-12 text-center border border-slate-200">
+            <Package className="w-16 h-16 text-slate-300 mx-auto mb-4" />
+            <h3 className="text-xl font-semibold text-slate-700 dark:text-slate-300 mb-2">Нет данных за выбранный период</h3>
+            <p className="text-slate-500 dark:text-slate-400 mb-4">
+              За период с {safeFormatDate(dateFilter.start, 'dd.MM.yyyy')} по {safeFormatDate(dateFilter.end, 'dd.MM.yyyy')} нет заказов или ошибок.
+            </p>
+            <button 
+              onClick={handleSetCurrentMonth}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            >
+              Показать текущий месяц
+            </button>
+          </div>
+        ) : (
+          <>
+            {/* Основные метрики */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+              <StatCard title="Заказов за период" value={orders.length} icon={<Package className="w-6 h-6" />} color="blue" />
+              <StatCard title="Ср. время сборки" value={stats.avgTime} icon={<Clock className="w-6 h-6" />} color="emerald" />
+              <StatCard title="Общая прибыль" value={`${stats.totalProfit.toLocaleString()} ₽`} icon={<TrendingUp className="w-6 h-6" />} color="green" />
+              <StatCard title="Ошибки (JAMBS)" value={jambs.length} icon={<AlertTriangle className="w-6 h-6" />} color="red" />
             </div>
-          </ChartCard>
-        </div>
 
-        {/* KPI ошибок */}
-        <ChartCard title="KPI ошибок (JAMBS)" icon={<AlertTriangle className="w-5 h-5 text-red-500" />}>
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={jambData}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-              <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11 }} />
-              <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-              <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-              <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px' }} />
-              <Legend verticalAlign="top" height={36} />
-              <Bar yAxisId="left" dataKey="critical" name="Critical" fill="#ef4444" stackId="a" />
-              <Bar yAxisId="left" dataKey="high" name="High" fill="#f97316" stackId="a" />
-              <Bar yAxisId="left" dataKey="medium" name="Medium" fill="#eab308" stackId="a" />
-              <Bar yAxisId="left" dataKey="low" name="Low" fill="#22c55e" stackId="a" />
-              <Line yAxisId="right" type="monotone" dataKey="kpiScore" name="KPI Score" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3 }} />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </ChartCard>
+            {/* Графики: Заказы по дням недели и Время сборки по часам */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              <ChartCard title="Заказы по дням недели" icon={<BarChart3 className="w-5 h-5 text-blue-600" />}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={weeklyData}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                    <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}
+                      formatter={(value: any) => [`${value} заказов`, '']}
+                    />
+                    <Bar dataKey="orders" fill="#2563eb" radius={[8, 8, 0, 0]} barSize={50} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartCard>
 
-        {/* Эффективность сотрудников */}
-        <ChartCard title="Эффективность сотрудников (KPI)" icon={<Users className="w-5 h-5 text-emerald-600" />}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={employeeKPI} layout="vertical" margin={{ left: 80 }}>
-              <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
-              <XAxis type="number" domain={[0, 100]} axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-              <YAxis type="category" dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} width={70} />
-              <Tooltip formatter={(value: any, name: string, props: any) => {
-                const data = props.payload;
-                return [`KPI: ${data.kpiScore}% | Заказов: ${data.orders} | Время: ${data.avgTimeDisplay} | Ошибок: ${data.jambs}`, ''];
-              }} />
-              <Bar dataKey="kpiScore" name="KPI %" fill="#10b981" radius={[0, 8, 8, 0]}>
-                {employeeKPI.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.kpiScore >= 80 ? '#10b981' : entry.kpiScore >= 60 ? '#eab308' : '#ef4444'} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartCard>
+              <ChartCard title="Среднее время сборки по часам" icon={<Clock className="w-5 h-5 text-emerald-600" />}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={hourlyData.filter(h => h.assembledCount > 0)}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11 }} interval={2} />
+                    <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                    <Tooltip formatter={(value: any, name: any, props: any) => [props.payload.avgAssemblyTimeDisplay, 'Среднее время']} />
+                    <Line type="monotone" dataKey="avgAssemblyTime" stroke="#10b981" strokeWidth={3} dot={{ r: 4, fill: '#10b981' }} />
+                  </LineChart>
+                </ResponsiveContainer>
+                <div className="text-center text-xs text-slate-400 mt-2">
+                  Показаны часы с выполненными заказами
+                </div>
+              </ChartCard>
+            </div>
 
-        {/* Динамика заказов и распределение по ТК */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <ChartCard title="Динамика заказов" icon={<TrendingUp className="w-5 h-5 text-emerald-600" />}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={hourlyData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11 }} interval={3} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                <Tooltip />
-                <Area type="monotone" dataKey="orders" stroke="#10b981" strokeWidth={3} fill="#10b981" fillOpacity={0.2} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </ChartCard>
+            {/* KPI ошибок */}
+            <ChartCard title="KPI ошибок (JAMBS)" icon={<AlertTriangle className="w-5 h-5 text-red-500" />}>
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={jambData}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                  <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                  <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                  <Tooltip contentStyle={{ backgroundColor: '#fff', borderRadius: '12px' }} />
+                  <Legend verticalAlign="top" height={36} />
+                  <Bar yAxisId="left" dataKey="critical" name="Critical" fill="#ef4444" stackId="a" />
+                  <Bar yAxisId="left" dataKey="high" name="High" fill="#f97316" stackId="a" />
+                  <Bar yAxisId="left" dataKey="medium" name="Medium" fill="#eab308" stackId="a" />
+                  <Bar yAxisId="left" dataKey="low" name="Low" fill="#22c55e" stackId="a" />
+                  <Line yAxisId="right" type="monotone" dataKey="kpiScore" name="KPI Score" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </ChartCard>
 
-          <ChartCard title="Распределение по ТК" icon={<Truck className="w-5 h-5 text-blue-600" />}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={carrierChartData} cx="50%" cy="50%" labelLine={false} label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`} outerRadius={100} dataKey="value">
-                  {carrierChartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={CARRIER_COLORS[entry.name] || '#94a3b8'} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend verticalAlign="bottom" height={36} />
-              </PieChart>
-            </ResponsiveContainer>
-          </ChartCard>
-        </div>
+            {/* Эффективность сотрудников (KPI) */}
+            <ChartCard title="Эффективность сотрудников (KPI)" icon={<Users className="w-5 h-5 text-emerald-600" />}>
+              {employeeKPI.length === 0 ? (
+                <div className="flex items-center justify-center h-full text-slate-400">
+                  Нет данных о сотрудниках
+                </div>
+              ) : (
+                <>
+                  {/* Горизонтальные бары для KPI */}
+                  <div className="space-y-4 mb-6">
+                    {employeeKPI.map((employee, idx) => (
+                      <div key={idx} className="space-y-1">
+                        <div className="flex justify-between text-sm">
+                          <span className="font-medium text-slate-700 dark:text-slate-300">
+                            {employee.name}
+                          </span>
+                          <span className="font-bold" style={{
+                            color: employee.kpiScore >= 80 ? '#10b981' : employee.kpiScore >= 60 ? '#eab308' : '#ef4444'
+                          }}>
+                            {employee.kpiScore}%
+                          </span>
+                        </div>
+                        <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-3 overflow-hidden">
+                          <div 
+                            className="h-3 rounded-full transition-all duration-500"
+                            style={{ 
+                              width: `${employee.kpiScore}%`,
+                              backgroundColor: employee.kpiScore >= 80 ? '#10b981' : employee.kpiScore >= 60 ? '#eab308' : '#ef4444'
+                            }}
+                          />
+                        </div>
+                        <div className="flex justify-between text-xs text-slate-500">
+                          <span>📦 {employee.orders} заказов</span>
+                          <span>⏱️ {employee.avgTimeDisplay}</span>
+                          <span>⚠️ {employee.jambs} ошибок</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Статистика */}
+                  <div className="grid grid-cols-3 gap-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+                    <div className="text-center">
+                      <div className="text-xs text-slate-500">Лидер</div>
+                      <div className="font-bold text-slate-900 dark:text-white text-lg">
+                        {employeeKPI[0]?.name || '—'}
+                      </div>
+                      <div className="text-xs text-emerald-600 font-semibold">
+                        {employeeKPI[0]?.kpiScore}%
+                      </div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-xs text-slate-500">Средний KPI</div>
+                      <div className="font-bold text-slate-900 dark:text-white text-lg">
+                        {employeeKPI.length ? Math.round(employeeKPI.reduce((a, b) => a + b.kpiScore, 0) / employeeKPI.length) : '—'}%
+                      </div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-xs text-slate-500">Всего сотрудников</div>
+                      <div className="font-bold text-slate-900 dark:text-white text-lg">
+                        {employeeKPI.length}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </ChartCard>
+
+            {/* Динамика заказов и распределение по ТК */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              <ChartCard title="Динамика заказов" icon={<TrendingUp className="w-5 h-5 text-emerald-600" />}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={hourlyData}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11 }} interval={3} />
+                    <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                    <Tooltip />
+                    <Area type="monotone" dataKey="orders" stroke="#10b981" strokeWidth={3} fill="#10b981" fillOpacity={0.2} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </ChartCard>
+
+              <ChartCard title="Распределение по ТК" icon={<Truck className="w-5 h-5 text-blue-600" />}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={carrierChartData} cx="50%" cy="50%" labelLine={false} label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`} outerRadius={100} dataKey="value">
+                      {carrierChartData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={CARRIER_COLORS[entry.name] || '#94a3b8'} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                    <Legend verticalAlign="bottom" height={36} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </ChartCard>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -560,7 +748,6 @@ function StatCard({ title, value, icon, color, subtitle }: any) {
   const colors: any = {
     blue: 'bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-400',
     emerald: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30 dark:text-emerald-400',
-    orange: 'bg-orange-50 text-orange-600 dark:bg-orange-950/30 dark:text-orange-400',
     green: 'bg-green-50 text-green-600 dark:bg-green-950/30 dark:text-green-400',
     red: 'bg-red-50 text-red-600 dark:bg-red-950/30 dark:text-red-400'
   };
