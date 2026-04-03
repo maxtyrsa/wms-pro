@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
 import { 
@@ -12,19 +12,25 @@ import {
   updateDoc, 
   deleteDoc, 
   serverTimestamp,
-  getDocs
+  getDocs,
+  where,
+  QueryConstraint,
+  startAfter,
+  limit,
+  DocumentSnapshot
 } from 'firebase/firestore';
-import { format, isWithinInterval, startOfDay, endOfDay } from 'date-fns';
+import { format, startOfDay, endOfDay, startOfMonth, endOfMonth } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
 import { useRouter } from 'next/navigation';
 import { 
   CheckSquare, Square, X, ChevronDown, Package, 
   Clock, Hash, CheckCircle2, ArrowLeft, Trash2,
   ChevronRight, Loader2, Search, XCircle, User, Truck, Weight, Box, Calendar, DollarSign,
-  Edit2, Save, Plus, Minus, Copy
+  Edit2, Save, Plus, Minus, Copy, Filter
 } from 'lucide-react';
 import { showToast } from '@/components/Toast';
 import { ReturnManagement } from '@/components/returns/ReturnManagement';
+import { useInView } from 'react-intersection-observer';
 
 const CARRIERS = ['Все', 'CDEK', 'DPD', 'Деловые линии', 'Почта России', 'ПЭК', 'Самовывоз', 'Образцы', 'OZON_FBS', 'Ярмарка Мастеров', 'Yandex Market', 'WB_FBS', 'AliExpress', 'Бийск', 'OZON_FBO', 'WB_FBO'];
 const STATUSES = ['Все', 'Новый', 'Комплектация', 'Ожидает оформления', 'Готов к выдаче', 'Оформлен', 'Отправлен', 'Завершен', 'Выдан', 'Запрошен возврат', 'Возврат одобрен', 'Возврат получен', 'На повторной обработке', 'Повторная отправка'];
@@ -39,110 +45,333 @@ interface Place {
   weight: number;
 }
 
+interface Order {
+  id: string;
+  orderNumber?: string;
+  carrier: string;
+  status: string;
+  createdAt: any;
+  createdBy: string;
+  quantity?: number;
+  totalWeight?: number;
+  totalVolume?: number;
+  payment_sum?: number;
+  delivery_cost?: number;
+  profit?: number;
+  time_start?: any;
+  time_end?: any;
+  places_data?: Place[];
+  history?: any[];
+}
+
+interface Filters {
+  startDate: string;
+  endDate: string;
+  carrier: string;
+  status: string;
+  searchQuery: string;
+}
+
+// Хук для пагинированной загрузки заказов
+function usePaginatedOrders(filters: Filters) {
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [lastDoc, setLastDoc] = useState<DocumentSnapshot | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Функция для построения ограничений запроса на основе фильтров
+  const buildConstraints = useCallback((): QueryConstraint[] => {
+    const constraints: QueryConstraint[] = [];
+
+    // Фильтр по дате
+    if (filters.startDate && filters.endDate) {
+      const start = startOfDay(new Date(filters.startDate));
+      const end = endOfDay(new Date(filters.endDate));
+      constraints.push(where('createdAt', '>=', start.toISOString()));
+      constraints.push(where('createdAt', '<=', end.toISOString()));
+    }
+
+    // Фильтр по ТК
+    if (filters.carrier && filters.carrier !== 'Все') {
+      constraints.push(where('carrier', '==', filters.carrier));
+    }
+
+    // Фильтр по статусу
+    if (filters.status && filters.status !== 'Все') {
+      constraints.push(where('status', '==', filters.status));
+    }
+
+    // Поиск по номеру заказа - используем startAt/endAt для текстового поиска
+    if (filters.searchQuery && filters.searchQuery.trim()) {
+      const searchTerm = filters.searchQuery.trim();
+      const endTerm = searchTerm + '\uf8ff'; // Специальный символ для поиска по префиксу
+      constraints.push(where('orderNumber', '>=', searchTerm));
+      constraints.push(where('orderNumber', '<=', endTerm));
+    }
+
+    // Сортировка по дате создания (новые сверху)
+    constraints.push(orderBy('createdAt', 'desc'));
+
+    return constraints;
+  }, [filters]);
+
+  // Загрузка первой порции заказов
+  const loadInitialOrders = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const constraints = buildConstraints();
+      const q = query(
+        collection(db, 'orders'),
+        ...constraints,
+        limit(PAGE_SIZE)
+      );
+      
+      const snapshot = await getDocs(q);
+      const newOrders = snapshot.docs.map(doc => ({ 
+        id: doc.id, 
+        ...doc.data() 
+      } as Order));
+      
+      setOrders(newOrders);
+      setLastDoc(snapshot.docs[snapshot.docs.length - 1] || null);
+      setHasMore(snapshot.docs.length === PAGE_SIZE);
+      
+      // Опционально: получаем общее количество (требует отдельного запроса)
+      // Для больших коллекций это может быть дорого, поэтому делаем опционально
+      if (newOrders.length > 0) {
+        const countQuery = query(collection(db, 'orders'), ...constraints);
+        const countSnapshot = await getDocs(countQuery);
+        setTotalCount(countSnapshot.size);
+      }
+    } catch (err) {
+      console.error('Error loading orders:', err);
+      setError('Ошибка при загрузке заказов');
+      showToast('Ошибка при загрузке заказов', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [buildConstraints]);
+
+  // Загрузка следующей порции
+  const loadMoreOrders = useCallback(async () => {
+    if (!hasMore || loadingMore || loading) return;
+    
+    setLoadingMore(true);
+    
+    try {
+      const constraints = buildConstraints();
+      let q = query(
+        collection(db, 'orders'),
+        ...constraints,
+        limit(PAGE_SIZE)
+      );
+      
+      if (lastDoc) {
+        q = query(q, startAfter(lastDoc));
+      }
+      
+      const snapshot = await getDocs(q);
+      const newOrders = snapshot.docs.map(doc => ({ 
+        id: doc.id, 
+        ...doc.data() 
+      } as Order));
+      
+      setOrders(prev => [...prev, ...newOrders]);
+      setLastDoc(snapshot.docs[snapshot.docs.length - 1] || null);
+      setHasMore(snapshot.docs.length === PAGE_SIZE);
+    } catch (err) {
+      console.error('Error loading more orders:', err);
+      showToast('Ошибка при загрузке дополнительных заказов', 'error');
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [hasMore, loadingMore, loading, lastDoc, buildConstraints]);
+
+  // Обновление при изменении фильтров
+  useEffect(() => {
+    loadInitialOrders();
+  }, [loadInitialOrders]);
+
+  return {
+    orders,
+    loading,
+    loadingMore,
+    hasMore,
+    totalCount,
+    error,
+    loadMore: loadMoreOrders,
+    refresh: loadInitialOrders
+  };
+}
+
 export default function AdminOrdersPage() {
   const { user } = useAuth();
   const router = useRouter();
+  const { ref: loadMoreRef, inView } = useInView();
   
-  const [allOrders, setAllOrders] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [displayLimit, setDisplayLimit] = useState(PAGE_SIZE);
+  // Состояние фильтров
+  const [filters, setFilters] = useState<Filters>({
+    startDate: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+    endDate: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
+    carrier: 'Все',
+    status: 'Все',
+    searchQuery: '',
+  });
   
-  // States for loading indicators
-  const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null);
+  // Используем наш хук для загрузки заказов
+  const { 
+    orders, 
+    loading, 
+    loadingMore, 
+    hasMore, 
+    totalCount,
+    error,
+    loadMore,
+    refresh 
+  } = usePaginatedOrders(filters);
+  
+  // Состояния для UI
+  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
+  const [selectedOrderDetails, setSelectedOrderDetails] = useState<Order | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editFormData, setEditFormData] = useState<any>(null);
+  const [editingPlaces, setEditingPlaces] = useState<Place[]>([]);
+  const [massStatusMenuOpen, setMassStatusMenuOpen] = useState(false);
   const [updatingStatusId, setUpdatingStatusId] = useState<string | null>(null);
+  const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null);
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [savingFinance, setSavingFinance] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
-
-  // Filters
-  const [searchQuery, setSearchQuery] = useState('');
-  const [dateRange, setDateRange] = useState<{ start: string; end: string }>({
-    start: format(new Date(), 'yyyy-MM-dd'),
-    end: format(new Date(), 'yyyy-MM-dd'),
-  });
-  const [selectedCarrier, setSelectedCarrier] = useState('Все');
-  const [selectedStatus, setSelectedStatus] = useState('Все');
-
-  // Selection
-  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
-
-  // Modal
-  const [selectedOrderDetails, setSelectedOrderDetails] = useState<any | null>(null);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editFormData, setEditFormData] = useState<any>(null);
-  const [massStatusMenuOpen, setMassStatusMenuOpen] = useState(false);
   
-  // Редактирование мест
-  const [editingPlaces, setEditingPlaces] = useState<Place[]>([]);
+  // Групповой ввод для мест
   const [groupInput, setGroupInput] = useState('');
   const [groupD, setGroupD] = useState('');
   const [groupW, setGroupW] = useState('');
   const [groupH, setGroupH] = useState('');
   const [groupWeight, setGroupWeight] = useState('');
+  
+  // Показываем индикатор загрузки при первой загрузке
+  if (loading && orders.length === 0) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+      </div>
+    );
+  }
 
-  // Загрузка всех заказов
-  const loadAllOrders = async () => {
-    setLoading(true);
+  // Обработчики фильтров
+  const handleFilterChange = (key: keyof Filters, value: string) => {
+    setFilters(prev => ({ ...prev, [key]: value }));
+    setSelectedOrders(new Set()); // Сбрасываем выделение при смене фильтра
+  };
+  
+  const clearSearch = () => handleFilterChange('searchQuery', '');
+  const resetDateFilter = () => {
+    setFilters(prev => ({
+      ...prev,
+      startDate: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+      endDate: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
+    }));
+  };
+
+  // Выделение заказов
+  const toggleOrderSelection = (id: string) => {
+    const newSelection = new Set(selectedOrders);
+    if (newSelection.has(id)) {
+      newSelection.delete(id);
+    } else {
+      newSelection.add(id);
+    }
+    setSelectedOrders(newSelection);
+  };
+
+  const toggleAllSelection = () => {
+    if (selectedOrders.size === orders.length) {
+      setSelectedOrders(new Set());
+    } else {
+      setSelectedOrders(new Set(orders.map(o => o.id)));
+    }
+  };
+
+  // Массовое изменение статуса
+  const handleMassStatusChange = async (newStatus: string) => {
+    if (selectedOrders.size === 0) return;
+    
+    setBulkUpdating(true);
     try {
-      const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
-      const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setAllOrders(data);
-    } catch (error) {
-      console.error('Error loading orders:', error);
-      showToast('Ошибка при загрузке заказов', 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadAllOrders();
-  }, []);
-
-  // Фильтрация на клиенте
-  const filteredOrders = useMemo(() => {
-    let filtered = [...allOrders];
-    
-    if (dateRange.start && dateRange.end) {
-      const start = startOfDay(new Date(dateRange.start));
-      const end = endOfDay(new Date(dateRange.end));
-      filtered = filtered.filter(order => {
-        const orderDate = order.createdAt?.seconds ? new Date(order.createdAt.seconds * 1000) : new Date(order.createdAt);
-        if (isNaN(orderDate.getTime())) return false;
-        return isWithinInterval(orderDate, { start, end });
+      const batch = writeBatch(db);
+      selectedOrders.forEach(id => {
+        const orderRef = doc(db, 'orders', id);
+        const updateData: any = {
+          status: newStatus,
+          lastUpdated: serverTimestamp()
+        };
+        if (newStatus === 'Отправлен') updateData.shippedAt = serverTimestamp();
+        if (newStatus === 'Выдан') updateData.issuedAt = serverTimestamp();
+        batch.update(orderRef, updateData);
       });
+      await batch.commit();
+      
+      setMassStatusMenuOpen(false);
+      setSelectedOrders(new Set());
+      showToast(`Статус ${selectedOrders.size} заказов изменен на "${newStatus}"`, 'success');
+      refresh(); // Обновляем список
+    } catch (error) {
+      console.error('Error bulk updating status:', error);
+      showToast('Ошибка при массовом изменении статусов', 'error');
+    } finally {
+      setBulkUpdating(false);
     }
-    
-    if (selectedCarrier !== 'Все') {
-      filtered = filtered.filter(order => order.carrier === selectedCarrier);
-    }
-    
-    if (selectedStatus !== 'Все') {
-      filtered = filtered.filter(order => order.status === selectedStatus);
-    }
-    
-    if (searchQuery.trim()) {
-      const queryLower = searchQuery.trim().toLowerCase();
-      filtered = filtered.filter(order => 
-        order.orderNumber?.toLowerCase().includes(queryLower)
-      );
-    }
-    
-    return filtered;
-  }, [allOrders, dateRange, selectedCarrier, selectedStatus, searchQuery]);
-
-  const displayedOrders = useMemo(() => {
-    return filteredOrders.slice(0, displayLimit);
-  }, [filteredOrders, displayLimit]);
-
-  const hasMoreOrders = displayLimit < filteredOrders.length;
-
-  const loadMore = () => {
-    setDisplayLimit(prev => prev + PAGE_SIZE);
   };
 
-  // Открытие редактирования
+  // Изменение статуса одного заказа
+  const handleSingleStatusChange = async (id: string, newStatus: string) => {
+    setUpdatingStatusId(id);
+    try {
+      const orderRef = doc(db, 'orders', id);
+      const updateData: any = { status: newStatus };
+      if (newStatus === 'Отправлен') updateData.shippedAt = serverTimestamp();
+      if (newStatus === 'Выдан') updateData.issuedAt = serverTimestamp();
+      await updateDoc(orderRef, updateData);
+      
+      if (selectedOrderDetails?.id === id) {
+        setSelectedOrderDetails({ ...selectedOrderDetails, status: newStatus });
+      }
+      
+      showToast(`Статус заказа изменен на "${newStatus}"`, 'success');
+      refresh();
+    } catch (error) {
+      console.error('Error updating status:', error);
+      showToast('Ошибка при изменении статуса', 'error');
+    } finally {
+      setUpdatingStatusId(null);
+    }
+  };
+
+  // Удаление заказа
+  const handleDeleteOrder = async (id: string) => {
+    if (!window.confirm('Вы уверены, что хотите безвозвратно удалить этот заказ?')) return;
+    
+    setDeletingOrderId(id);
+    try {
+      await deleteDoc(doc(db, 'orders', id));
+      setSelectedOrderDetails(null);
+      showToast('Заказ успешно удален', 'success');
+      refresh();
+    } catch (error) {
+      console.error('Error deleting order:', error);
+      showToast('Ошибка при удалении заказа', 'error');
+    } finally {
+      setDeletingOrderId(null);
+    }
+  };
+
+  // Редактирование заказа
   const openEditMode = () => {
     if (!selectedOrderDetails) return;
     setEditFormData({
@@ -160,19 +389,12 @@ export default function AdminOrdersPage() {
     setIsEditing(true);
   };
 
-  // Закрытие редактирования
   const closeEditMode = () => {
     setIsEditing(false);
     setEditFormData(null);
     setEditingPlaces([]);
-    setGroupInput('');
-    setGroupD('');
-    setGroupW('');
-    setGroupH('');
-    setGroupWeight('');
   };
 
-  // Сохранение редактирования
   const handleSaveEdit = async () => {
     if (!selectedOrderDetails) return;
     
@@ -193,11 +415,8 @@ export default function AdminOrdersPage() {
         lastEditedBy: user?.email
       };
       
-      // Обновляем места
       if (editingPlaces.length > 0) {
         updateData.places_data = editingPlaces;
-        
-        // Пересчитываем вес и объем
         let totalWeight = 0;
         let totalVolume = 0;
         editingPlaces.forEach(place => {
@@ -207,9 +426,6 @@ export default function AdminOrdersPage() {
         });
         updateData.totalWeight = totalWeight;
         updateData.totalVolume = totalVolume;
-      } else {
-        updateData.totalWeight = editFormData.totalWeight;
-        updateData.totalVolume = editFormData.totalVolume;
       }
       
       await updateDoc(orderRef, updateData);
@@ -222,7 +438,7 @@ export default function AdminOrdersPage() {
       
       showToast('Заказ успешно обновлен', 'success');
       closeEditMode();
-      loadAllOrders();
+      refresh();
     } catch (error) {
       console.error('Error saving edit:', error);
       showToast('Ошибка при сохранении изменений', 'error');
@@ -231,7 +447,7 @@ export default function AdminOrdersPage() {
     }
   };
 
-  // Функции для редактирования мест
+  // Управление местами
   const addPlace = () => {
     setEditingPlaces([...editingPlaces, { d: 0, w: 0, h: 0, weight: 0 }]);
   };
@@ -287,94 +503,6 @@ export default function AdminOrdersPage() {
     setEditingPlaces(newPlaces);
   };
 
-  const handleDeleteOrder = async (id: string) => {
-    if (!window.confirm('Вы уверены, что хотите безвозвратно удалить этот заказ?')) return;
-    
-    setDeletingOrderId(id);
-    try {
-      await deleteDoc(doc(db, 'orders', id));
-      setSelectedOrderDetails(null);
-      showToast('Заказ успешно удален', 'success');
-      loadAllOrders();
-    } catch (error) {
-      console.error('Error deleting order:', error);
-      showToast('Ошибка при удалении заказа', 'error');
-    } finally {
-      setDeletingOrderId(null);
-    }
-  };
-
-  const toggleOrderSelection = (id: string) => {
-    const newSelection = new Set(selectedOrders);
-    if (newSelection.has(id)) {
-      newSelection.delete(id);
-    } else {
-      newSelection.add(id);
-    }
-    setSelectedOrders(newSelection);
-  };
-
-  const toggleAllSelection = () => {
-    if (selectedOrders.size === displayedOrders.length) {
-      setSelectedOrders(new Set());
-    } else {
-      setSelectedOrders(new Set(displayedOrders.map(o => o.id)));
-    }
-  };
-
-  const handleMassStatusChange = async (newStatus: string) => {
-    if (selectedOrders.size === 0) return;
-    
-    setBulkUpdating(true);
-    try {
-      const batch = writeBatch(db);
-      selectedOrders.forEach(id => {
-        const orderRef = doc(db, 'orders', id);
-        const updateData: any = {
-          status: newStatus,
-          lastUpdated: serverTimestamp()
-        };
-        if (newStatus === 'Отправлен') updateData.shippedAt = serverTimestamp();
-        if (newStatus === 'Выдан') updateData.issuedAt = serverTimestamp();
-        batch.update(orderRef, updateData);
-      });
-      await batch.commit();
-      
-      setMassStatusMenuOpen(false);
-      setSelectedOrders(new Set());
-      showToast(`Статус ${selectedOrders.size} заказов изменен на "${newStatus}"`, 'success');
-      loadAllOrders();
-    } catch (error) {
-      console.error('Error bulk updating status:', error);
-      showToast('Ошибка при массовом изменении статусов', 'error');
-    } finally {
-      setBulkUpdating(false);
-    }
-  };
-
-  const handleSingleStatusChange = async (id: string, newStatus: string) => {
-    setUpdatingStatusId(id);
-    try {
-      const orderRef = doc(db, 'orders', id);
-      const updateData: any = { status: newStatus };
-      if (newStatus === 'Отправлен') updateData.shippedAt = serverTimestamp();
-      if (newStatus === 'Выдан') updateData.issuedAt = serverTimestamp();
-      await updateDoc(orderRef, updateData);
-      
-      if (selectedOrderDetails?.id === id) {
-        setSelectedOrderDetails({ ...selectedOrderDetails, status: newStatus });
-      }
-      
-      showToast(`Статус заказа изменен на "${newStatus}"`, 'success');
-      loadAllOrders();
-    } catch (error) {
-      console.error('Error updating status:', error);
-      showToast('Ошибка при изменении статуса', 'error');
-    } finally {
-      setUpdatingStatusId(null);
-    }
-  };
-
   const handleSaveFinance = async () => {
     if (!selectedOrderDetails) return;
     
@@ -393,7 +521,7 @@ export default function AdminOrdersPage() {
       
       setSelectedOrderDetails({ ...selectedOrderDetails, payment_sum: paymentSum, delivery_cost: deliveryCost, profit });
       showToast('Финансовая информация сохранена', 'success');
-      loadAllOrders();
+      refresh();
     } catch (error) {
       console.error('Error saving finance:', error);
       showToast('Ошибка при сохранении финансов', 'error');
@@ -402,6 +530,7 @@ export default function AdminOrdersPage() {
     }
   };
 
+  // Вспомогательные функции
   const formatAssemblyTime = (start: any, end: any) => {
     if (!start || !end) return '-';
     const getTime = (t: any) => {
@@ -437,13 +566,10 @@ export default function AdminOrdersPage() {
     }
   };
 
-  const clearSearch = () => setSearchQuery('');
-
-  // Расчет общего веса и объема
-  const getTotalVolume = (order: any) => {
+  const getTotalVolume = (order: Order) => {
     if (order.totalVolume) return order.totalVolume;
     if (order.places_data) {
-      return order.places_data.reduce((acc: number, p: any) => {
+      return order.places_data.reduce((acc, p) => {
         const v = (Number(p.d || 0) * Number(p.w || 0) * Number(p.h || 0)) / 1000000;
         return acc + (isNaN(v) ? 0 : v);
       }, 0);
@@ -451,21 +577,13 @@ export default function AdminOrdersPage() {
     return 0;
   };
 
-  const getTotalWeight = (order: any) => {
+  const getTotalWeight = (order: Order) => {
     if (order.totalWeight) return order.totalWeight;
     if (order.places_data) {
-      return order.places_data.reduce((acc: number, p: any) => acc + (Number(p.weight) || 0), 0);
+      return order.places_data.reduce((acc, p) => acc + (Number(p.weight) || 0), 0);
     }
     return 0;
   };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 transition-colors duration-200">
@@ -481,8 +599,8 @@ export default function AdminOrdersPage() {
             <div>
               <h1 className="text-xl font-bold text-slate-900 dark:text-white">Управление заказами</h1>
               <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                Всего: {allOrders.length} заказов • Отфильтровано: {filteredOrders.length}
-                {filteredOrders.length > displayLimit && <span className="ml-2 text-blue-500">(показано {displayLimit})</span>}
+                {totalCount !== null ? `Всего: ${totalCount} заказов • Показано: ${orders.length}` : `Загружено: ${orders.length} заказов`}
+                {hasMore && <span className="ml-2 text-blue-500">(есть еще)</span>}
               </p>
             </div>
           </div>
@@ -493,18 +611,18 @@ export default function AdminOrdersPage() {
       </header>
 
       <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
-        {/* Поиск и фильтры */}
+        {/* Фильтры */}
         <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 space-y-4">
           <div className="relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <input
               type="text"
               placeholder="Поиск по номеру заказа..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              value={filters.searchQuery}
+              onChange={(e) => handleFilterChange('searchQuery', e.target.value)}
               className="w-full pl-12 pr-10 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
             />
-            {searchQuery && (
+            {filters.searchQuery && (
               <button onClick={clearSearch} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
                 <XCircle className="w-5 h-5" />
               </button>
@@ -514,41 +632,89 @@ export default function AdminOrdersPage() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">От даты</label>
-              <input type="date" value={dateRange.start} onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
-                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+              <input 
+                type="date" 
+                value={filters.startDate} 
+                onChange={(e) => handleFilterChange('startDate', e.target.value)}
+                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" 
+              />
             </div>
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">До даты</label>
-              <input type="date" value={dateRange.end} onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
-                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" />
+              <input 
+                type="date" 
+                value={filters.endDate} 
+                onChange={(e) => handleFilterChange('endDate', e.target.value)}
+                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" 
+              />
             </div>
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Компания</label>
-              <select value={selectedCarrier} onChange={(e) => setSelectedCarrier(e.target.value)}
-                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer">
+              <select 
+                value={filters.carrier} 
+                onChange={(e) => handleFilterChange('carrier', e.target.value)}
+                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer"
+              >
                 {CARRIERS.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Статус</label>
-              <select value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)}
-                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer">
+              <select 
+                value={filters.status} 
+                onChange={(e) => handleFilterChange('status', e.target.value)}
+                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer"
+              >
                 {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
           </div>
+          
+          {/* Индикатор активных фильтров */}
+          {(filters.carrier !== 'Все' || filters.status !== 'Все' || filters.searchQuery) && (
+            <div className="flex flex-wrap gap-2 pt-2">
+              <span className="text-xs text-slate-500">Активные фильтры:</span>
+              {filters.carrier !== 'Все' && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 rounded-lg text-xs">
+                  ТК: {filters.carrier}
+                  <button onClick={() => handleFilterChange('carrier', 'Все')} className="hover:text-blue-900">×</button>
+                </span>
+              )}
+              {filters.status !== 'Все' && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300 rounded-lg text-xs">
+                  Статус: {filters.status}
+                  <button onClick={() => handleFilterChange('status', 'Все')} className="hover:text-purple-900">×</button>
+                </span>
+              )}
+              {filters.searchQuery && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-lg text-xs">
+                  Поиск: {filters.searchQuery}
+                  <button onClick={clearSearch} className="hover:text-slate-900">×</button>
+                </span>
+              )}
+              <button onClick={resetDateFilter} className="text-xs text-blue-600 hover:underline ml-auto">
+                Сбросить даты
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Bulk Actions Bar */}
         <div className="flex flex-col md:flex-row items-center justify-between bg-white dark:bg-slate-900 p-4 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 gap-4">
           <div className="flex items-center gap-3">
-            <button onClick={toggleAllSelection} className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 text-sm font-bold text-slate-700 dark:text-slate-300 transition-all border border-transparent hover:border-slate-200 dark:hover:border-slate-700">
-              {selectedOrders.size === displayedOrders.length && displayedOrders.length > 0 ? 
+            <button 
+              onClick={toggleAllSelection} 
+              className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 text-sm font-bold text-slate-700 dark:text-slate-300 transition-all border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+            >
+              {selectedOrders.size === orders.length && orders.length > 0 ? 
                 <CheckSquare className="w-5 h-5 text-blue-600" /> : <Square className="w-5 h-5 text-slate-300" />}
               Выбрать все
             </button>
             <div className="h-6 w-[1px] bg-slate-200 dark:bg-slate-700 hidden md:block" />
-            <span className="text-sm font-medium text-slate-500 dark:text-slate-400">Найдено: <b className="text-slate-900 dark:text-white">{filteredOrders.length}</b></span>
+            <span className="text-sm font-medium text-slate-500 dark:text-slate-400">
+              Найдено: <b className="text-slate-900 dark:text-white">{orders.length}</b>
+              {totalCount !== null && totalCount > orders.length && <span className="text-xs ml-1">(из {totalCount})</span>}
+            </span>
           </div>
 
           <div className="relative w-full md:w-auto">
@@ -572,11 +738,18 @@ export default function AdminOrdersPage() {
             
             <AnimatePresence>
               {massStatusMenuOpen && !bulkUpdating && (
-                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }}
-                  className="absolute right-0 mt-3 w-56 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-100 dark:border-slate-700 overflow-hidden z-40 p-1">
+                <motion.div 
+                  initial={{ opacity: 0, y: 10 }} 
+                  animate={{ opacity: 1, y: 0 }} 
+                  exit={{ opacity: 0, y: 10 }}
+                  className="absolute right-0 mt-3 w-56 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-100 dark:border-slate-700 overflow-hidden z-40 p-1"
+                >
                   {STATUSES.filter(s => s !== 'Все').map(status => (
-                    <button key={status} onClick={() => handleMassStatusChange(status)}
-                      className="w-full text-left px-4 py-3 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-blue-950/30 hover:text-blue-700 dark:hover:text-blue-400 rounded-xl transition-all">
+                    <button 
+                      key={status} 
+                      onClick={() => handleMassStatusChange(status)}
+                      className="w-full text-left px-4 py-3 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-blue-950/30 hover:text-blue-700 dark:hover:text-blue-400 rounded-xl transition-all"
+                    >
                       {status}
                     </button>
                   ))}
@@ -586,7 +759,7 @@ export default function AdminOrdersPage() {
           </div>
         </div>
 
-        {/* Main Table */}
+        {/* Таблица заказов */}
         <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
@@ -602,26 +775,31 @@ export default function AdminOrdersPage() {
                   <th className="p-5 text-right">Вес</th>
                   <th className="p-5 text-right">Прибыль</th>
                   <th className="p-5 text-right w-12"></th>
-                  </tr>
+                </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {displayedOrders.length === 0 ? (
+                {orders.length === 0 ? (
                   <tr>
                     <td colSpan={10} className="p-20 text-center text-slate-400 dark:text-slate-500 font-medium">
-                      {searchQuery ? 'Заказы не найдены по запросу' : 'Заказы не найдены за этот период'}
+                      {filters.searchQuery || filters.carrier !== 'Все' || filters.status !== 'Все' 
+                        ? 'Заказы не найдены по выбранным фильтрам' 
+                        : 'Заказов пока нет'}
                     </td>
                   </tr>
                 ) : (
-                  displayedOrders.map(order => (
-                    <tr key={order.id} onClick={() => setSelectedOrderDetails(order)}
-                      className={`group hover:bg-blue-50/30 dark:hover:bg-blue-950/30 transition-all cursor-pointer ${selectedOrders.has(order.id) ? 'bg-blue-50 dark:bg-blue-950/20' : ''}`}>
+                  orders.map(order => (
+                    <tr 
+                      key={order.id} 
+                      onClick={() => setSelectedOrderDetails(order)}
+                      className={`group hover:bg-blue-50/30 dark:hover:bg-blue-950/30 transition-all cursor-pointer ${selectedOrders.has(order.id) ? 'bg-blue-50 dark:bg-blue-950/20' : ''}`}
+                    >
                       <td className="p-5" onClick={(e) => e.stopPropagation()}>
                         <button onClick={() => toggleOrderSelection(order.id)} className="transition-transform active:scale-90">
                           {selectedOrders.has(order.id) ? <CheckSquare className="w-6 h-6 text-blue-600" /> : <Square className="w-6 h-6 text-slate-200 group-hover:text-slate-300" />}
                         </button>
                       </td>
                       <td className="p-5 text-slate-500 dark:text-slate-400 text-xs font-medium whitespace-nowrap">
-                        {order.createdAt ? format(order.createdAt?.seconds ? new Date(order.createdAt.seconds * 1000) : new Date(order.createdAt), 'dd.MM.yy HH:mm') : '-'}
+                        {order.createdAt ? format(new Date(order.createdAt.seconds ? order.createdAt.seconds * 1000 : order.createdAt), 'dd.MM.yy HH:mm') : '-'}
                       </td>
                       <td className="p-5 font-bold text-slate-900 dark:text-white">{order.orderNumber || '—'}</td>
                       <td className="p-5 text-slate-600 dark:text-slate-400 font-semibold text-xs uppercase">{order.carrier}</td>
@@ -630,10 +808,18 @@ export default function AdminOrdersPage() {
                           {order.status}
                         </span>
                       </td>
-                      <td className="p-5 text-slate-600 dark:text-slate-400 text-xs font-medium truncate max-w-[120px]">{order.createdBy?.split('@')[0] || order.createdBy || 'Система'}</td>
-                      <td className="p-5 text-center font-mono text-xs text-slate-500 dark:text-slate-400">{formatAssemblyTime(order.time_start, order.time_end)}</td>
-                      <td className="p-5 text-right font-bold text-slate-900 dark:text-white">{order.totalWeight ? `${Number(order.totalWeight).toFixed(1)} кг` : '—'}</td>
-                      <td className="p-5 text-right font-bold text-emerald-600 dark:text-emerald-400">{order.profit ? `${order.profit.toLocaleString()} ₽` : '—'}</td>
+                      <td className="p-5 text-slate-600 dark:text-slate-400 text-xs font-medium truncate max-w-[120px]">
+                        {order.createdBy?.split('@')[0] || order.createdBy || 'Система'}
+                      </td>
+                      <td className="p-5 text-center font-mono text-xs text-slate-500 dark:text-slate-400">
+                        {formatAssemblyTime(order.time_start, order.time_end)}
+                      </td>
+                      <td className="p-5 text-right font-bold text-slate-900 dark:text-white">
+                        {order.totalWeight ? `${Number(order.totalWeight).toFixed(1)} кг` : '—'}
+                      </td>
+                      <td className="p-5 text-right font-bold text-emerald-600 dark:text-emerald-400">
+                        {order.profit ? `${order.profit.toLocaleString()} ₽` : '—'}
+                      </td>
                       <td className="p-5 text-right">
                         <button
                           onClick={(e) => {
@@ -653,28 +839,41 @@ export default function AdminOrdersPage() {
             </table>
           </div>
           
-          {/* Pagination Controls */}
-          {!loading && filteredOrders.length > 0 && hasMoreOrders && (
-            <div className="flex items-center justify-center px-6 py-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-800/30">
-              <button
-                onClick={loadMore}
-                className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-all"
-              >
-                <ChevronRight className="w-4 h-4" />
-                Показать еще {Math.min(PAGE_SIZE, filteredOrders.length - displayLimit)} заказов
-              </button>
+          {/* Индикатор загрузки и кнопка "Загрузить еще" */}
+          {orders.length > 0 && hasMore && (
+            <div ref={loadMoreRef} className="flex items-center justify-center px-6 py-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-800/30">
+              {loadingMore ? (
+                <div className="flex items-center gap-2 text-slate-500">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span className="text-sm">Загрузка...</span>
+                </div>
+              ) : (
+                <button
+                  onClick={loadMore}
+                  className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-all"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                  Загрузить еще
+                </button>
+              )}
             </div>
           )}
         </div>
       </div>
 
-      {/* Модальное окно деталей заказа */}
+      {/* Модальное окно деталей заказа (остается без изменений) */}
       <AnimatePresence>
         {selectedOrderDetails && (
           <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-sm" onClick={() => { setSelectedOrderDetails(null); closeEditMode(); }}>
-            <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              onClick={(e) => e.stopPropagation()} className="bg-white dark:bg-slate-900 h-full w-full max-w-2xl shadow-2xl flex flex-col relative">
-              
+            <motion.div 
+              initial={{ x: '100%' }} 
+              animate={{ x: 0 }} 
+              exit={{ x: '100%' }} 
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              onClick={(e) => e.stopPropagation()} 
+              className="bg-white dark:bg-slate-900 h-full w-full max-w-2xl shadow-2xl flex flex-col relative"
+            >
+              {/* ... содержимое модального окна остается без изменений ... */}
               <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
                 <div>
                   <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
@@ -696,7 +895,6 @@ export default function AdminOrdersPage() {
 
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 {isEditing ? (
-                  // Режим редактирования
                   <div className="space-y-6">
                     {/* Основные поля */}
                     <div className="grid grid-cols-2 gap-4">
@@ -750,7 +948,6 @@ export default function AdminOrdersPage() {
                         </button>
                       </div>
                       
-                      {/* Групповой ввод */}
                       <div className="bg-slate-50 dark:bg-slate-800 p-3 rounded-xl mb-4">
                         <p className="text-xs font-medium text-slate-600 mb-2">Групповой ввод</p>
                         <div className="grid grid-cols-5 gap-2 mb-2">
@@ -766,7 +963,6 @@ export default function AdminOrdersPage() {
                         </div>
                       </div>
                       
-                      {/* Список мест */}
                       <div className="space-y-2 max-h-64 overflow-y-auto">
                         {editingPlaces.map((place, idx) => (
                           <div key={idx} className="flex items-center gap-2 p-2 bg-slate-50 dark:bg-slate-800 rounded-lg">
@@ -781,7 +977,6 @@ export default function AdminOrdersPage() {
                       </div>
                     </div>
 
-                    {/* Кнопки сохранения/отмены */}
                     <div className="flex gap-3 pt-4">
                       <button onClick={closeEditMode} className="flex-1 py-3 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-700 dark:text-slate-300 font-medium">Отмена</button>
                       <button onClick={handleSaveEdit} disabled={savingEdit} className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-medium flex items-center justify-center gap-2">
@@ -793,7 +988,6 @@ export default function AdminOrdersPage() {
                 ) : (
                   // Режим просмотра
                   <div className="space-y-6">
-                    {/* Информация о заказе */}
                     <div className="grid grid-cols-2 gap-4">
                       <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-2xl">
                         <div className="flex items-center gap-2 text-slate-500 mb-1"><User className="w-4 h-4" /><span className="text-[10px] font-black">Сборщик</span></div>
@@ -805,14 +999,12 @@ export default function AdminOrdersPage() {
                       </div>
                     </div>
 
-                    {/* Логистика */}
                     <div className="grid grid-cols-3 gap-3">
                       <div className="p-3 bg-white dark:bg-slate-800 border rounded-2xl text-center"><Box className="w-4 h-4 mx-auto mb-1 text-slate-400" /><p className="text-xs text-slate-500">Мест</p><p className="font-bold">{selectedOrderDetails.quantity || 0}</p></div>
                       <div className="p-3 bg-white dark:bg-slate-800 border rounded-2xl text-center"><Weight className="w-4 h-4 mx-auto mb-1 text-slate-400" /><p className="text-xs text-slate-500">Вес</p><p className="font-bold">{getTotalWeight(selectedOrderDetails).toFixed(2)} кг</p></div>
                       <div className="p-3 bg-white dark:bg-slate-800 border rounded-2xl text-center"><Package className="w-4 h-4 mx-auto mb-1 text-slate-400" /><p className="text-xs text-slate-500">Объем</p><p className="font-bold">{getTotalVolume(selectedOrderDetails).toFixed(4)} м³</p></div>
                     </div>
 
-                    {/* Габариты мест */}
                     {selectedOrderDetails.places_data && selectedOrderDetails.places_data.length > 0 && (
                       <div className="space-y-3">
                         <h3 className="text-xs font-black text-slate-900 dark:text-white uppercase flex items-center gap-2"><Hash size={14} className="text-blue-500" />Габариты мест</h3>
@@ -827,7 +1019,6 @@ export default function AdminOrdersPage() {
                       </div>
                     )}
 
-                    {/* Финансы */}
                     <div className="border-t border-slate-100 dark:border-slate-800 pt-4 space-y-3">
                       <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2"><DollarSign className="w-4 h-4 text-emerald-500" />Финансовая информация</h3>
                       <div className="flex justify-between p-3 bg-blue-50 dark:bg-blue-950/30 rounded-xl"><span className="text-blue-800">Сумма заказа:</span><span className="font-bold">{selectedOrderDetails.payment_sum?.toLocaleString() || 0} ₽</span></div>
@@ -836,10 +1027,8 @@ export default function AdminOrdersPage() {
                       <button onClick={handleSaveFinance} disabled={savingFinance} className="w-full py-2 bg-blue-600 text-white rounded-xl text-sm font-medium">{savingFinance ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Сохранить финансы'}</button>
                     </div>
 
-                    {/* Управление возвратами */}
-                    <ReturnManagement order={selectedOrderDetails} onUpdate={loadAllOrders} />
+                    <ReturnManagement order={selectedOrderDetails} onUpdate={refresh} />
 
-                    {/* Управление статусом */}
                     <div className="bg-blue-50 dark:bg-blue-950/30 p-5 rounded-3xl space-y-4">
                       <div className="flex items-center gap-2 text-blue-700"><CheckCircle2 size={18} /><span className="text-xs font-black uppercase">Управление статусом</span></div>
                       <div className="flex flex-wrap gap-2">
@@ -858,7 +1047,6 @@ export default function AdminOrdersPage() {
                       </select>
                     </div>
 
-                    {/* История изменений */}
                     {selectedOrderDetails.history && selectedOrderDetails.history.length > 0 && (
                       <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
                         <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2 mb-3"><Clock className="w-4 h-4 text-slate-400" />История изменений</h3>
@@ -873,7 +1061,6 @@ export default function AdminOrdersPage() {
                       </div>
                     )}
 
-                    {/* Danger Zone */}
                     <div className="pt-4 border-t border-red-200 dark:border-red-800">
                       <button onClick={() => handleDeleteOrder(selectedOrderDetails.id)} disabled={deletingOrderId === selectedOrderDetails.id} className="w-full flex items-center justify-center gap-2 p-3 bg-red-50 dark:bg-red-950/30 text-red-600 rounded-xl text-xs font-bold uppercase hover:bg-red-100 transition-all">
                         {deletingOrderId === selectedOrderDetails.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 size={14} />}

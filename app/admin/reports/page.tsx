@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import Link from 'next/link';
+import { startOfMonth, endOfMonth, format } from 'date-fns';
 
 interface Order {
   id: string;
@@ -80,8 +81,8 @@ export default function ReportsPage() {
   const router = useRouter();
   
   const [exporting, setExporting] = useState(false);
-  const [startDate, setStartDate] = useState(new Date(new Date().setDate(new Date().getDate() - 7)).toISOString().split('T')[0]);
-  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [startDate, setStartDate] = useState(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+  const [endDate, setEndDate] = useState(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {

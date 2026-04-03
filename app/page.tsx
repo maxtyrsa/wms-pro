@@ -355,7 +355,14 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode, label:
   );
 }
 
-function NavCard({ href, icon, title, color }: { href: string; icon: React.ReactNode; title: string; color: string }) {
+
+function NavCard({ href, icon, title, color, description }: { 
+  href: string; 
+  icon: React.ReactNode; 
+  title: string; 
+  color: string;
+  description?: string;
+}) {
   const colorMap: any = {
     blue: 'bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-400',
     indigo: 'bg-indigo-50 text-indigo-600 dark:bg-indigo-950/30 dark:text-indigo-400',
@@ -379,6 +386,11 @@ function NavCard({ href, icon, title, color }: { href: string; icon: React.React
         <p className="font-bold text-slate-900 dark:text-white text-xs sm:text-sm break-words text-center max-w-[80px] sm:max-w-none">
           {title}
         </p>
+        {description && (
+          <p className="text-[10px] text-slate-400 dark:text-slate-500 hidden sm:block">
+            {description}
+          </p>
+        )}
       </div>
     </Link>
   );

@@ -1,13 +1,32 @@
+// app/admin/consolidations/page.tsx - исправленная версия
+
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Package, Truck, Eye, X, Loader2, Layers, Shield, Printer, CalendarDays, Filter } from 'lucide-react';
+import { 
+  ArrowLeft, Package, Truck, Eye, X, Loader2, Layers, 
+  Shield, Printer, CalendarDays, Filter, RefreshCw, Search,
+  CheckCircle2, XCircle, Clock, AlertCircle
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, query, getDocs, updateDoc, doc, writeBatch, where } from 'firebase/firestore';
-import { format, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
+import { 
+  collection, 
+  query, 
+  getDocs, 
+  updateDoc, 
+  doc, 
+  writeBatch, 
+  where, 
+  orderBy, 
+  limit, 
+  startAfter, 
+  DocumentSnapshot,
+  Timestamp
+} from 'firebase/firestore';
+import { format, startOfDay, endOfDay, isWithinInterval, startOfMonth, endOfMonth } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { showToast } from '@/components/Toast';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
@@ -31,69 +50,144 @@ interface Consolidation {
   orders: any[];
 }
 
+const PAGE_SIZE = 15;
+const STATUS_CONFIG = {
+  pending: {
+    label: 'Ожидает отправки',
+    color: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
+    icon: Clock,
+    nextStatus: 'shipped',
+    nextLabel: 'Отправить'
+  },
+  shipped: {
+    label: 'Отправлена',
+    color: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300',
+    icon: CheckCircle2,
+    nextStatus: null,
+    nextLabel: null
+  },
+  cancelled: {
+    label: 'Отменена',
+    color: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
+    icon: XCircle,
+    nextStatus: null,
+    nextLabel: null
+  }
+};
+
 export default function ConsolidationsPage() {
   const router = useRouter();
-  const { role, loading } = useAuth();
-  const [allConsolidations, setAllConsolidations] = useState<Consolidation[]>([]);
-  const [filteredConsolidations, setFilteredConsolidations] = useState<Consolidation[]>([]);
-  const [loadingData, setLoadingData] = useState(true);
-  const [selectedConsolidation, setSelectedConsolidation] = useState<Consolidation | null>(null);
-  const [showPrintModal, setShowPrintModal] = useState(false);
-  const [selectedForPrint, setSelectedForPrint] = useState<Consolidation | null>(null);
-  const [availableOrders, setAvailableOrders] = useState<any[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
+  const { role, loading: authLoading } = useAuth();
   
-  // Фильтр по дате
-  const [dateFilter, setDateFilter] = useState<{ start: string; end: string }>({
-    start: format(startOfDay(new Date()), 'yyyy-MM-dd'),
-    end: format(endOfDay(new Date()), 'yyyy-MM-dd'),
-  });
+  // Состояния для данных
+  const [consolidations, setConsolidations] = useState<Consolidation[]>([]);
+  const [lastDoc, setLastDoc] = useState<DocumentSnapshot | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingData, setLoadingData] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [selectedForPrint, setSelectedForPrint] = useState<Consolidation | null>(null);
+  const [showPrintModal, setShowPrintModal] = useState(false);
+  const [availableOrders, setAvailableOrders] = useState<any[]>([]);
+  
+  // Фильтры
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [dateFilter, setDateFilter] = useState<{ start: string; end: string }>(() => ({
+    start: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+    end: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
+  }));
   const [showDateFilter, setShowDateFilter] = useState(false);
+  
+  // Refs для предотвращения бесконечных циклов
+  const isInitialLoadRef = useRef(true);
+  const isLoadingRef = useRef(false);
 
+  // Проверка авторизации
   useEffect(() => {
-    if (loading) return;
-    if (role !== 'admin') {
+    if (!authLoading && role !== 'admin') {
       router.push('/');
-      return;
     }
-    fetchConsolidations();
-    fetchAvailableOrders();
-  }, [role, loading]);
+  }, [authLoading, role, router]);
 
-  useEffect(() => {
-    applyFilters();
-  }, [allConsolidations, searchQuery, dateFilter]);
+  // Загрузка консолей
+  const loadConsolidations = useCallback(async (loadMore = false) => {
+    // Предотвращаем одновременную загрузку
+    if (isLoadingRef.current) return;
+    if (loadMore && !hasMore) return;
+    
+    isLoadingRef.current = true;
+    
+    if (loadMore) {
+      setLoadingMore(true);
+    } else {
+      setLoadingData(true);
+    }
 
-  const fetchConsolidations = async () => {
     try {
-      const q = query(collection(db, 'consolidations'));
+      const constraints: any[] = [orderBy('createdAt', 'desc')];
+      
+      if (statusFilter !== 'all') {
+        constraints.unshift(where('status', '==', statusFilter));
+      }
+      
+      let q = query(collection(db, 'consolidations'), ...constraints, limit(PAGE_SIZE));
+      
+      if (loadMore && lastDoc) {
+        q = query(q, startAfter(lastDoc));
+      }
+      
       const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Consolidation));
-      const sortedData = data.sort((a, b) => 
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      );
-      setAllConsolidations(sortedData);
+      const newConsolidations = snapshot.docs.map(doc => ({ 
+        id: doc.id, 
+        ...doc.data() 
+      } as Consolidation));
+      
+      if (loadMore) {
+        setConsolidations(prev => [...prev, ...newConsolidations]);
+      } else {
+        setConsolidations(newConsolidations);
+      }
+      
+      setLastDoc(snapshot.docs[snapshot.docs.length - 1] || null);
+      setHasMore(snapshot.docs.length === PAGE_SIZE);
+      
     } catch (error) {
       console.error('Error fetching consolidations:', error);
       showToast('Ошибка при загрузке консолей', 'error');
     } finally {
       setLoadingData(false);
+      setLoadingMore(false);
+      isLoadingRef.current = false;
     }
-  };
+  }, [statusFilter, lastDoc, hasMore]);
 
-  const fetchAvailableOrders = async () => {
+  // Загрузка доступных заказов
+  const fetchAvailableOrders = useCallback(async () => {
     try {
-      const q = query(collection(db, 'orders'), where('status', '==', 'Оформлен'));
+      const q = query(
+        collection(db, 'orders'), 
+        where('status', '==', 'Оформлен')
+      );
       const snapshot = await getDocs(q);
       const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setAvailableOrders(orders);
     } catch (error) {
       console.error('Error fetching available orders:', error);
     }
-  };
+  }, []);
 
-  const applyFilters = () => {
-    let filtered = [...allConsolidations];
+  // Загрузка при монтировании и смене статус-фильтра
+  useEffect(() => {
+    if (role === 'admin') {
+      loadConsolidations();
+      fetchAvailableOrders();
+    }
+  }, [role, statusFilter, loadConsolidations, fetchAvailableOrders]); // Добавлены зависимости
+
+  // Фильтрация на клиенте (поиск и дата)
+  const filteredConsolidations = useMemo(() => {
+    let filtered = [...consolidations];
     
     if (searchQuery.trim()) {
       const queryLower = searchQuery.trim().toLowerCase();
@@ -111,57 +205,123 @@ export default function ConsolidationsPage() {
       });
     }
     
-    setFilteredConsolidations(filtered);
-  };
+    return filtered;
+  }, [consolidations, searchQuery, dateFilter]);
 
+  // Отметить консоль как отправленную
   const handleMarkAsShipped = async (consolidation: Consolidation) => {
     if (!confirm(`Подтвердить отправку консоли ${consolidation.consolidationNumber}?`)) return;
     
+    setUpdatingId(consolidation.id);
+    
     try {
       const consolidationRef = doc(db, 'consolidations', consolidation.id);
+      const now = new Date().toISOString();
+      
       await updateDoc(consolidationRef, {
         status: 'shipped',
-        actualShipmentDate: new Date().toISOString()
+        actualShipmentDate: now,
+        updatedAt: now
       });
       
       const batch = writeBatch(db);
       consolidation.orders.forEach((order: any) => {
         const orderRef = doc(db, 'orders', order.id);
-        batch.update(orderRef, { status: 'Отправлен' });
+        batch.update(orderRef, { 
+          status: 'Отправлен',
+          shippedAt: Timestamp.now()
+        });
       });
       await batch.commit();
       
-      showToast(`Консоль ${consolidation.consolidationNumber} отмечена как отправленная`, 'success');
-      fetchConsolidations();
+      showToast(`✅ Консоль ${consolidation.consolidationNumber} отправлена`, 'success');
+      
+      // Обновляем локальное состояние
+      setConsolidations(prev => prev.map(c => 
+        c.id === consolidation.id 
+          ? { ...c, status: 'shipped', actualShipmentDate: now }
+          : c
+      ));
+      
       fetchAvailableOrders();
+      
     } catch (error) {
       console.error('Error marking consolidation as shipped:', error);
-      showToast('Ошибка при обновлении статуса', 'error');
+      showToast('❌ Ошибка при отправке консоли', 'error');
+    } finally {
+      setUpdatingId(null);
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'pending':
-        return <span className="px-2 py-1 rounded-lg text-xs font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">Ожидает отправки</span>;
-      case 'shipped':
-        return <span className="px-2 py-1 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">Отправлена</span>;
-      case 'cancelled':
-        return <span className="px-2 py-1 rounded-lg text-xs font-bold bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300">Отменена</span>;
-      default:
-        return null;
+  // Отменить консоль
+  const handleCancelConsolidation = async (consolidation: Consolidation) => {
+    if (!confirm(`Отменить консоль ${consolidation.consolidationNumber}?`)) return;
+    
+    setUpdatingId(consolidation.id);
+    
+    try {
+      const consolidationRef = doc(db, 'consolidations', consolidation.id);
+      await updateDoc(consolidationRef, {
+        status: 'cancelled',
+        cancelledAt: new Date().toISOString()
+      });
+      
+      const batch = writeBatch(db);
+      consolidation.orders.forEach((order: any) => {
+        const orderRef = doc(db, 'orders', order.id);
+        batch.update(orderRef, { 
+          status: 'Оформлен',
+          consolidationId: null
+        });
+      });
+      await batch.commit();
+      
+      showToast(`🔄 Консоль ${consolidation.consolidationNumber} отменена`, 'warning');
+      
+      setConsolidations(prev => prev.map(c => 
+        c.id === consolidation.id 
+          ? { ...c, status: 'cancelled' }
+          : c
+      ));
+      
+      fetchAvailableOrders();
+      
+    } catch (error) {
+      console.error('Error cancelling consolidation:', error);
+      showToast('❌ Ошибка при отмене консоли', 'error');
+    } finally {
+      setUpdatingId(null);
     }
+  };
+
+  const handleRefresh = () => {
+    setConsolidations([]);
+    setLastDoc(null);
+    setHasMore(true);
+    loadConsolidations();
+    fetchAvailableOrders();
+    showToast('Данные обновлены', 'info');
   };
 
   const clearSearch = () => setSearchQuery('');
   const resetDateFilter = () => {
     setDateFilter({
-      start: format(startOfDay(new Date()), 'yyyy-MM-dd'),
-      end: format(endOfDay(new Date()), 'yyyy-MM-dd'),
+      start: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+      end: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
     });
   };
 
-  if (loading || loadingData) {
+  const loadMoreConsolidations = () => {
+    if (hasMore && !loadingMore && !loadingData) {
+      loadConsolidations(true);
+    }
+  };
+
+  const getStatusConfig = (status: string) => {
+    return STATUS_CONFIG[status as keyof typeof STATUS_CONFIG] || STATUS_CONFIG.pending;
+  };
+
+  if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
         <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
@@ -169,11 +329,18 @@ export default function ConsolidationsPage() {
     );
   }
 
+  if (role !== 'admin') {
+    return null;
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 pb-20 transition-colors duration-200">
       <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 py-4 sticky top-0 z-10 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <button onClick={() => router.back()} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
+          <button 
+            onClick={() => router.back()} 
+            className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"
+          >
             <ArrowLeft className="w-6 h-6 text-slate-600 dark:text-slate-400" />
           </button>
           <div>
@@ -190,17 +357,25 @@ export default function ConsolidationsPage() {
             Администратор
           </div>
         </div>
-        <ThemeToggle />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleRefresh}
+            disabled={loadingData}
+            className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"
+            title="Обновить"
+          >
+            <RefreshCw className={`w-5 h-5 text-slate-600 dark:text-slate-400 ${loadingData ? 'animate-spin' : ''}`} />
+          </button>
+          <ThemeToggle />
+        </div>
       </header>
 
       <main className="max-w-6xl mx-auto p-4">
-        {/* Поиск и фильтры */}
+        {/* Фильтры */}
         <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="relative">
-              <div className="absolute left-4 top-1/2 -translate-y-1/2">
-                <Package className="w-4 h-4 text-slate-400" />
-              </div>
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
                 type="text"
                 placeholder="Поиск по номеру консоли..."
@@ -214,6 +389,23 @@ export default function ConsolidationsPage() {
                 </button>
               )}
             </div>
+            
+            <select
+              value={statusFilter}
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setConsolidations([]);
+                setLastDoc(null);
+                setHasMore(true);
+              }}
+              className="px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
+            >
+              <option value="all">Все статусы</option>
+              <option value="pending">Ожидает отправки</option>
+              <option value="shipped">Отправлена</option>
+              <option value="cancelled">Отменена</option>
+            </select>
+            
             <div className="relative">
               <button
                 onClick={() => setShowDateFilter(!showDateFilter)}
@@ -234,11 +426,21 @@ export default function ConsolidationsPage() {
                   <div className="space-y-3">
                     <div>
                       <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">От даты</label>
-                      <input type="date" value={dateFilter.start} onChange={(e) => setDateFilter({ ...dateFilter, start: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm" />
+                      <input 
+                        type="date" 
+                        value={dateFilter.start} 
+                        onChange={(e) => setDateFilter({ ...dateFilter, start: e.target.value })} 
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm" 
+                      />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">До даты</label>
-                      <input type="date" value={dateFilter.end} onChange={(e) => setDateFilter({ ...dateFilter, end: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm" />
+                      <input 
+                        type="date" 
+                        value={dateFilter.end} 
+                        onChange={(e) => setDateFilter({ ...dateFilter, end: e.target.value })} 
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm" 
+                      />
                     </div>
                     <div className="flex gap-2 pt-2">
                       <button onClick={resetDateFilter} className="flex-1 px-3 py-2 text-sm border rounded-xl hover:bg-slate-50">Сбросить</button>
@@ -248,73 +450,184 @@ export default function ConsolidationsPage() {
                 </div>
               )}
             </div>
+            
             <div></div>
           </div>
-          <div className="text-xs text-slate-500 mt-3">
-            Найдено: <span className="font-bold text-slate-900">{filteredConsolidations.length}</span> консолей
+          
+          <div className="flex items-center justify-between mt-4 text-xs text-slate-500">
+            <span>
+              Найдено: <b className="text-slate-900 dark:text-white">{filteredConsolidations.length}</b> консолей
+            </span>
+            {hasMore && consolidations.length > 0 && !loadingData && (
+              <button
+                onClick={loadMoreConsolidations}
+                disabled={loadingMore}
+                className="text-blue-600 hover:underline flex items-center gap-1"
+              >
+                {loadingMore ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  'Загрузить еще'
+                )}
+              </button>
+            )}
           </div>
         </div>
 
-        {filteredConsolidations.length === 0 ? (
+        {/* Список консолей */}
+        {loadingData && consolidations.length === 0 ? (
+          <div className="flex items-center justify-center py-12 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800">
+            <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+            <span className="ml-3 text-slate-500">Загрузка консолей...</span>
+          </div>
+        ) : filteredConsolidations.length === 0 ? (
           <div className="text-center py-12 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800">
             <Package className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
             <p className="text-slate-400 dark:text-slate-500">
-              {allConsolidations.length === 0 ? 'Нет созданных консолей' : 'Консоли не найдены по выбранным фильтрам'}
+              {consolidations.length === 0 
+                ? 'Нет созданных консолей' 
+                : 'Консоли не найдены по выбранным фильтрам'}
             </p>
-            {allConsolidations.length === 0 && (
-              <button onClick={() => router.push('/admin/shipments')} className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-medium">
-                Создать консоль
+            {consolidations.length === 0 && (
+              <button 
+                onClick={() => router.push('/admin/shipments')} 
+                className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 transition-colors"
+              >
+                Создать первую консоль →
               </button>
             )}
           </div>
         ) : (
           <div className="space-y-4">
-            {filteredConsolidations.map(cons => (
-              <div key={cons.id} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-md transition-all overflow-hidden">
-                <div className="p-5 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
-                  <div className="flex items-center justify-between flex-wrap gap-4">
-                    <div>
-                      <div className="flex items-center gap-3 mb-1">
-                        <h2 className="text-lg font-bold text-slate-900 dark:text-white">{cons.consolidationNumber}</h2>
-                        {getStatusBadge(cons.status)}
+            {filteredConsolidations.map(cons => {
+              const statusConfig = getStatusConfig(cons.status);
+              const StatusIcon = statusConfig.icon;
+              const isUpdating = updatingId === cons.id;
+              
+              return (
+                <div 
+                  key={cons.id} 
+                  className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-md transition-all overflow-hidden"
+                >
+                  <div className="p-5 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
+                    <div className="flex items-center justify-between flex-wrap gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2 rounded-lg ${statusConfig.color}`}>
+                          <StatusIcon className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-3 mb-1">
+                            <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                              {cons.consolidationNumber}
+                            </h2>
+                            <span className={`px-3 py-1 rounded-lg text-xs font-bold ${statusConfig.color}`}>
+                              {statusConfig.label}
+                            </span>
+                          </div>
+                          <p className="text-sm text-slate-500 dark:text-slate-400">
+                            {cons.carrier} • {format(new Date(cons.createdAt), 'dd.MM.yyyy HH:mm', { locale: ru })}
+                          </p>
+                        </div>
                       </div>
-                      <p className="text-sm text-slate-500 dark:text-slate-400">
-                        {cons.carrier} • {format(new Date(cons.createdAt), 'dd.MM.yyyy HH:mm', { locale: ru })}
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      {cons.status === 'pending' && (
-                        <button onClick={() => handleMarkAsShipped(cons)} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium flex items-center gap-2">
-                          <Truck className="w-4 h-4" />
-                          Отметить отправленной
+                      
+                      <div className="flex gap-2">
+                        {cons.status === 'pending' && (
+                          <>
+                            <button 
+                              onClick={() => handleMarkAsShipped(cons)}
+                              disabled={isUpdating}
+                              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
+                            >
+                              {isUpdating ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <Truck className="w-4 h-4" />
+                              )}
+                              {isUpdating ? 'Отправка...' : 'Отправить'}
+                            </button>
+                            <button 
+                              onClick={() => handleCancelConsolidation(cons)}
+                              disabled={isUpdating}
+                              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
+                            >
+                              <XCircle className="w-4 h-4" />
+                              Отменить
+                            </button>
+                          </>
+                        )}
+                        <button
+                          onClick={() => {
+                            setSelectedForPrint(cons);
+                            setShowPrintModal(true);
+                          }}
+                          className="px-4 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-sm font-medium flex items-center gap-2 transition-colors"
+                        >
+                          <Eye className="w-4 h-4" />
+                          Просмотр
                         </button>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="p-5">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                      <div>
+                        <p className="text-slate-500 text-xs">Заказов</p>
+                        <p className="font-bold text-lg">{cons.totalOrders}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500 text-xs">Вес</p>
+                        <p className="font-bold">{cons.totalWeight.toFixed(1)} кг</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500 text-xs">Объем</p>
+                        <p className="font-bold">{cons.totalVolume.toFixed(4)} м³</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500 text-xs">Прибыль</p>
+                        <p className="font-bold text-emerald-600">{cons.totalProfit.toLocaleString()} ₽</p>
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm border-t border-slate-100 dark:border-slate-800 pt-4">
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-500">Ответственный:</span>
+                        <span className="font-medium text-slate-900 dark:text-white">{cons.responsiblePerson}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-500">Плановая отправка:</span>
+                        <span className="font-medium">{format(new Date(cons.plannedShipmentDate), 'dd.MM.yyyy')}</span>
+                      </div>
+                      {cons.actualShipmentDate && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-500">Фактическая отправка:</span>
+                          <span className="font-medium text-emerald-600">
+                            {format(new Date(cons.actualShipmentDate), 'dd.MM.yyyy HH:mm')}
+                          </span>
+                        </div>
                       )}
-                      <button
-                        onClick={() => {
-                          setSelectedForPrint(cons);
-                          setShowPrintModal(true);
-                        }}
-                        className="px-4 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-sm font-medium flex items-center gap-2"
-                      >
-                        <Eye className="w-4 h-4" />
-                        Редактировать
-                      </button>
+                      {cons.notes && (
+                        <div className="col-span-2 flex items-start gap-2">
+                          <span className="text-slate-500">Примечания:</span>
+                          <span className="text-slate-600 dark:text-slate-400">{cons.notes}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
-                <div className="p-5 grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div><p className="text-slate-500 text-xs">Заказов</p><p className="font-bold">{cons.totalOrders}</p></div>
-                  <div><p className="text-slate-500 text-xs">Вес</p><p className="font-bold">{cons.totalWeight.toFixed(1)} кг</p></div>
-                  <div><p className="text-slate-500 text-xs">Объем</p><p className="font-bold">{cons.totalVolume.toFixed(4)} м³</p></div>
-                  <div><p className="text-slate-500 text-xs">Прибыль</p><p className="font-bold text-emerald-600">{cons.totalProfit.toLocaleString()} ₽</p></div>
-                </div>
+              );
+            })}
+            
+            {loadingMore && (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+                <span className="ml-2 text-slate-500">Загрузка...</span>
               </div>
-            ))}
+            )}
           </div>
         )}
       </main>
 
-      {/* Модальное окно редактирования консоли */}
       <AnimatePresence>
         {showPrintModal && selectedForPrint && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
@@ -331,10 +644,10 @@ export default function ConsolidationsPage() {
                   setSelectedForPrint(null);
                 }}
                 onUpdate={() => {
-                  fetchConsolidations();
+                  loadConsolidations();
                   fetchAvailableOrders();
                 }}
-                availableOrders={availableOrders.filter(o => o.carrier === selectedForPrint.carrier)}
+                availableOrders={availableOrders.filter(o => o.carrier === selectedForPrint.carrier && o.status === 'Оформлен')}
               />
             </motion.div>
           </div>

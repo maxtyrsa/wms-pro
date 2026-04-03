@@ -1,39 +1,62 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Пользователи
+
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function isUser(email) {
+        return isAuth() && request.auth.token.email == email
+    }
+
+    function isAdmin() {
+      return isAuth() && get(/databases/$(database)/documents/users/$(request.auth.token.email)).data.role == 'admin';
+    }
+
+    function isEmployee() {
+      return isAuth() && get(/databases/$(database)/documents/users/$(request.auth.token.email)).data.role == 'employee';
+    }
+
+    // Users
     match /users/{email} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && 
-        (request.auth.token.email == email || 
-         get(/databases/$(database)/documents/users/$(request.auth.token.email)).data.role == 'admin');
+      allow read, write: if isUser(email) || isAdmin();
     }
     
-    // Заказы
+    // Orders
     match /orders/{orderId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update: if request.auth != null;
-      allow delete: if request.auth != null && 
-        get(/databases/$(database)/documents/users/$(request.auth.token.email)).data.role == 'admin';
+      // Read access for employees and admins.
+      allow read: if isEmployee() || isAdmin();
+
+      // Delete access only for admins.
+      allow delete: if isAdmin();
+
+      // Create access for any authenticated user, with validation.
+      allow create: if isAuth()
+                    && request.resource.data.createdBy == request.auth.token.email
+                    && request.resource.data.status == 'Новый'
+                    && request.resource.data.createdAt == request.time;
+
+      // Update access is split for admins and employees.
+      allow update: if isAdmin()
+                    || (
+                      isEmployee() && resource.data.createdBy == request.auth.token.email &&
+                      // Employees cannot change sensitive fields.
+                      request.resource.data.createdBy == resource.data.createdBy &&
+                      request.resource.data.profit == resource.data.profit &&
+                      request.resource.data.payment_sum == resource.data.payment_sum &&
+                      request.resource.data.delivery_cost == resource.data.delivery_cost
+                    );
     }
     
     // JAMBS
     match /jambs/{jambId} {
-      allow read, write: if request.auth != null && 
-        get(/databases/$(database)/documents/users/$(request.auth.token.email)).data.role == 'admin';
+      allow read, write: if isAdmin();
     }
     
-    // Консолидации (новые правила)
+    // Consolidations
     match /consolidations/{consolidationId} {
-      allow read: if request.auth != null && 
-        get(/databases/$(database)/documents/users/$(request.auth.token.email)).data.role == 'admin';
-      allow create: if request.auth != null && 
-        get(/databases/$(database)/documents/users/$(request.auth.token.email)).data.role == 'admin';
-      allow update: if request.auth != null && 
-        get(/databases/$(database)/documents/users/$(request.auth.token.email)).data.role == 'admin';
-      allow delete: if request.auth != null && 
-        get(/databases/$(database)/documents/users/$(request.auth.token.email)).data.role == 'admin';
+      allow read, create, update, delete: if isAdmin();
     }
   }
 }

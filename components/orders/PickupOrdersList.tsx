@@ -1,3 +1,4 @@
+// components/orders/PickupOrdersList.tsx
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -7,6 +8,7 @@ import { format, differenceInDays } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { Package, Search, XCircle, Loader2, AlertTriangle, Clock, User, CalendarDays, Handshake } from 'lucide-react';
 import { showToast } from '@/components/Toast';
+import { useAuth } from '@/context/AuthContext';
 
 interface PickupOrder {
   id: string;
@@ -23,6 +25,7 @@ interface PickupOrdersListProps {
 }
 
 export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
+  const { user } = useAuth();
   const [allOrders, setAllOrders] = useState<PickupOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -60,7 +63,7 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
       await updateDoc(orderRef, {
         status: 'Выдан',
         issuedAt: new Date().toISOString(),
-        issuedBy: isAdmin ? 'admin' : 'employee'
+        issuedBy: isAdmin ? 'admin' : user?.email || 'employee'
       });
       showToast('Заказ выдан клиенту', 'success');
       fetchPickupOrders();
@@ -198,20 +201,19 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
                     </div>
                   </div>
                   
-                  {isAdmin && (
-                    <button
-                      onClick={() => handleMarkAsIssued(order.id)}
-                      disabled={updatingOrderId === order.id}
-                      className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2 whitespace-nowrap self-center"
-                    >
-                      {updatingOrderId === order.id ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Handshake className="w-4 h-4" />
-                      )}
-                      Выдать клиенту
-                    </button>
-                  )}
+                  {/* Кнопка выдачи - доступна и администратору, и сотруднику */}
+                  <button
+                    onClick={() => handleMarkAsIssued(order.id)}
+                    disabled={updatingOrderId === order.id}
+                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2 whitespace-nowrap self-center"
+                  >
+                    {updatingOrderId === order.id ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Handshake className="w-4 h-4" />
+                    )}
+                    Выдать клиенту
+                  </button>
                 </div>
                 
                 {storageDays > 14 && (

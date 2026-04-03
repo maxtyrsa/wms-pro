@@ -253,7 +253,7 @@ export default function EditOrderPage() {
               ) : (
                 <Save className="w-5 h-5" />
               )}
-              Сохранить и продолжить
+              Продолжить
             </button>
           </div>
         </motion.form>

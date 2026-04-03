@@ -84,7 +84,7 @@ export default function OrdersByDatePage() {
 
   useEffect(() => {
     loadOrders();
-  }, []);
+  }, [loadOrders]); // Добавлен loadOrders
 
   const loadMoreOrders = () => loadOrders(true);
 
