@@ -38,7 +38,7 @@ const PAGE_SIZE = 20;
 
 export default function AdminShipmentsPage() {
   const router = useRouter();
-  const { role, loading: authLoading } = useAuth();
+  const { role, loading: authLoading, user } = useAuth();
   const currentMonth = getCurrentMonthRange();
   
   // Состояния для заказов
@@ -457,6 +457,7 @@ export default function AdminShipmentsPage() {
         onClose={() => setShowCreateModal(false)}
         selectedOrders={getSelectedOrdersData()}
         onSuccess={handleConsolidationSuccess}
+        userEmail={user?.email || ''}
       />
     </div>
   );
