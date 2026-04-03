@@ -11,6 +11,7 @@ import { collection, query, where, orderBy, getDocs, limit, startAfter, Document
 import { db } from '@/lib/firebase';
 import { CreateConsolidationModal } from '@/components/consolidation/CreateConsolidationModal';
 import { showToast } from '@/components/Toast';
+import { useAuth } from '@/context/AuthContext';
 
 const PAGE_SIZE = 20;
 
@@ -29,6 +30,7 @@ interface Order {
 }
 
 export function ShippedOrdersList() {
+  const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCarrier, setSelectedCarrier] = useState<string>('Все');
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
@@ -397,6 +399,7 @@ export function ShippedOrdersList() {
             profit: o.profit || 0
           }))}
         onSuccess={handleConsolidationSuccess}
+        userEmail={user?.email || ''}
       />
     </div>
   );
