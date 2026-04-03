@@ -20,7 +20,10 @@ service cloud.firestore {
 
     // Users
     match /users/{email} {
-      allow read, write: if isUser(email) || isAdmin();
+      allow read: if isUser(email) || isAdmin() || isEmployee();
+      allow create: if isAdmin();
+      allow update: if (isUser(email) || isAdmin()) 
+                    && request.resource.data.role == resource.data.role;
     }
     
     // Orders

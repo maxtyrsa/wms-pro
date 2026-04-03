@@ -8,7 +8,6 @@ import {
   getRedirectResult,
   signOut, 
   signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
   sendPasswordResetEmail,
   User as FirebaseUser 
 } from 'firebase/auth';
@@ -23,7 +22,6 @@ interface AuthContextType {
   signInWithGoogle: () => Promise<void>;
   signInWithGoogleRedirect: () => Promise<void>;
   signInWithEmail: (email: string, password: string) => Promise<void>;
-  signUpWithEmail: (email: string, password: string, displayName: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -167,38 +165,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const signUpWithEmail = async (email: string, password: string, displayName: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await createUserWithEmailAndPassword(auth, email.toLowerCase(), password);
-      
-      // Создаем запись пользователя в Firestore
-      const userDocRef = doc(db, 'users', email.toLowerCase());
-      await setDoc(userDocRef, {
-        email: email.toLowerCase(),
-        displayName: displayName,
-        role: 'employee' // По умолчанию сотрудник
-      });
-      
-      setUser(result.user);
-      setRole('employee');
-    } catch (err: any) {
-      console.error('Email signup error:', err);
-      if (err.code === 'auth/email-already-in-use') {
-        setError('Email уже используется');
-      } else if (err.code === 'auth/weak-password') {
-        setError('Пароль слишком слабый (минимум 6 символов)');
-      } else if (err.code === 'auth/invalid-email') {
-        setError('Неверный формат email');
-      } else {
-        setError(err.message || 'Ошибка регистрации');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const resetPassword = async (email: string) => {
     setLoading(true);
     setError(null);
@@ -232,7 +198,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signInWithGoogle, 
       signInWithGoogleRedirect,
       signInWithEmail,
-      signUpWithEmail,
       resetPassword,
       logout 
     }}>
