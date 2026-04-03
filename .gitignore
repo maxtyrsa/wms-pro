@@ -1,40 +1,17 @@
-```gitignore
+```
 # Dependencies
 node_modules/
-.pnpm-store/
-.yarn/
-.yarn-cache/
 
 # Build outputs
-.next/
 dist/
 build/
+.next/
 out/
-output/
-.nuxt/
-public/build/
-
-# Logs
-*.log
-.log
 
 # Environment variables
 .env
 .env.local
 .env.*
-!.env.example
-
-# OS generated files
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# Editor files
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
 
 # Python
 __pycache__/
@@ -42,330 +19,36 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
-*.so
-.coverage
-htmlcov/
-.pytest_cache/
-.mypy_cache/
-.venv/
+env/
 venv/
-ENV/
+.venv/
+pip-log.txt
+pip-selfcheck.json
 
-# Coverage reports
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Coverage
 coverage/
-*.gcov
-*.lcov
+htmlcov/
+.coverage
 
 # Temporary files
 *.tmp
 *.temp
-*.bak
-*.orig
-*.rej
-
-# Compiled Binary files
-*.exe
-*.dll
-*.so
-*.dylib
-*.class
-*.o
-*.obj
-*.a
-*.lib
-*.out
-
-# Compressed files
-*.zip
-*.gz
-*.tar
-*.tgz
-*.bz2
-*.xz
-*.7z
-*.rar
-*.zst
-*.lz4
-*.lzh
-*.cab
-*.arj
-*.rpm
-*.deb
-*.Z
-*.lz
-*.lzo
-*.tar.gz
-*.tar.bz2
-*.tar.xz
-*.tar.zst
-
-# Gradle
-.gradle/
-build/
-
-# Maven
-target/
-
-# Go
-*.exe
-*.dll
-*.so
-*.dylib
-*.test
-*.prof
-
-# Ruby
-*.gem
-*.rbc
-.bundle/
-Gemfile.lock
-.rake_tasks
-~/.fetch-stash
-
-# Rust
-/target/
-
-# TypeScript
-*.tsbuildinfo
-*.js.map
-*.jsx.map
-*.ts.map
-*.tsx.map
-
-# Database
-*.db
-*.db-journal
-
-# Testing
-coverage/
-.nyc_output/
-coverage-final.json
-
-# CI
-.github/
-.gitlab/
-
-# Documentation
-docs/_build/
-.sphinx/
-
-# IDE
-.vs/
-*.sw?
-*~
-*.sublime-project
-*.sublime-workspace
-.project
-.classpath
-.settings/
-*.iml
-*.ipr
-*.iws
-
-# Package manager
-package-lock.json
-yarn.lock
-pnpm-lock.yaml
-composer.lock
-
-# Bower
-bower_components/
-
-# Jspm
-jspm_packages/
-
-# Webpack
-webpack.config.js
-.webpack/
-
-# Browser-sync
-.browser-sync/
-
-# Sass
-.sass-cache/
-*.css.map
-
-# Ember
-tmp/
-.ember-cli
-.ember/
-
-# Angular
-.angular/
-
-# Vue
-.vuepress/dist
-
-# Gatsby
-.cache/
-public/
-
-# Next.js
-.next/
-out/
-
-# Nuxt.js
-.nuxt/
-dist/
-
-# Docusaurus
-.docusaurus/
-
-# Ionic
-ionic.config.json
-
-# Cordova
-config.xml
-
-# PhoneGap
-config.xml
-
-# Electron
-release/
-dist-electron/
-
-# Expo
-.expo/
-.expo-shared/
-
-# React Native
-.rn_metadata
-ReactNativeENV
-
-# NativeScript
-node_modules/
-platforms/
-plugins/
-hooks/
-*.apk
-*.aab
-*.ipa
-
-# Unity
-Library/
-Temp/
-Obj/
-Build/
-Logs/
-.vs/
-
-# Unreal Engine
-Binaries/
-Intermediate/
-Saved/
-DerivedDataCache/
-
-# CMake
-CMakeFiles/
-cmake_install.manifest
-CMakeCache.txt
-*.cmake
-Testing/
-Makefile
-compile_commands.json
-
-# Meson
-meson-private/
-meson-log.txt
-
-# Ninja
-.ninja_deps
-.ninja_log
-
-# Autotools
-autom4te.cache/
-.libs/
-.deps/
-.libs/
-*.la
-*.lo
-
-# Vagrant
-.vagrant/
-
-# VirtualEnv
-.venv/
-venv/
-env/
-ENV/
-.ENV/
-
-# Docker
-.dockerignore
-!Dockerfile
-!docker-compose.yml
-
-# Ansible
-.retry/
-
-# Terraform
-.terraform/
-*.tfstate
-*.tfvars
-
-# Kubernetes
-.kube/
-
-# Helm
-.helm/
-
-# Serverless
-.serverless/
-
-# AWS
-.aws-sam/
-
-# Azure
-.azure/
-
-# Google Cloud
-.gcloud/
-
-# Firebase
-.firebase/
-
-# Netlify
-.netlify/
-
-# Vercel
-.vercel/
-
-# Heroku
-.heroku/
-
-# Railway
-.railway/
-
-# Railway
-.rw-cache/
-
-# Supabase
-.supabase/
-
-# PlanetScale
-.psdb/
-
-# Railway
-.railway/
-
-# Railway
-.rw-cache/
-
-# Supabase
-.supabase/
-
-# PlanetScale
-.psdb/
-
-# Railway
-.railway/
-
-# Railway
-.rw-cache/
-
-# Supabase
-.supabase/
-
-# PlanetScale
-.psdb/
 ```
