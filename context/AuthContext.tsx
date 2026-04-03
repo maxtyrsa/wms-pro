@@ -34,6 +34,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Функция для установки cookies с информацией о пользователе
+  const setUserCookies = (userRole: 'admin' | 'employee' | null) => {
+    // Устанавливаем cookie через document.cookie для клиентской стороны
+    // Middleware будет использовать эти cookies для проверки доступа
+    if (userRole) {
+      document.cookie = `user_role=${userRole}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`;
+      document.cookie = `is_authenticated=true; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`;
+    } else {
+      document.cookie = `user_role=; path=/; max-age=0; SameSite=Lax`;
+      document.cookie = `is_authenticated=; path=/; max-age=0; SameSite=Lax`;
+    }
+  };
+
   useEffect(() => {
     getRedirectResult(auth).catch((err) => {
       console.error('Redirect result error:', err);
@@ -62,6 +75,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const userData = userDoc.data();
             setUser(firebaseUser);
             setRole(userData.role as 'admin' | 'employee');
+            setUserCookies(userData.role as 'admin' | 'employee');
           } else if (isSuperAdmin) {
             // Создаем запись для суперадмина
             await setDoc(userDocRef, {
@@ -71,9 +85,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             });
             setUser(firebaseUser);
             setRole('admin');
+            setUserCookies('admin');
           } else {
             setUser(null);
             setRole(null);
+            setUserCookies(null);
             setError(`Доступ запрещен. Email ${email} не найден в системе. Обратитесь к администратору.`);
             await signOut(auth);
           }
@@ -82,11 +98,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           await signOut(auth);
           setUser(null);
           setRole(null);
+          setUserCookies(null);
           setError('Ошибка при проверке прав доступа');
         }
       } else {
         setUser(null);
         setRole(null);
+        setUserCookies(null);
       }
       setLoading(false);
     });
@@ -187,6 +205,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = async () => {
     try {
       await signOut(auth);
+      // Очищаем cookies при выходе
+      setUserCookies(null);
     } catch (err) {
       console.error('Logout error:', err);
     }

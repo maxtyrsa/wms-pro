@@ -6,30 +6,31 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isUser(email) {
-        return isAuth() && request.auth.token.email == email
+    // Проверка роли через Custom Claims (вместо чтения из Firestore)
+    function hasClaim(role) {
+      return isAuth() && request.auth.token[role] == true;
     }
 
     function isAdmin() {
-      return isAuth() && get(/databases/$(database)/documents/users/$(request.auth.token.email)).data.role == 'admin';
+      return hasClaim('admin');
     }
 
     function isEmployee() {
-      return isAuth() && get(/databases/$(database)/documents/users/$(request.auth.token.email)).data.role == 'employee';
+      return hasClaim('employee') || isAdmin();
     }
 
-    // Users
+    // Users - чтение только своих данных или админом
     match /users/{email} {
-      allow read: if isUser(email) || isAdmin() || isEmployee();
+      allow read: if request.auth.token.email == email || isAdmin();
       allow create: if isAdmin();
-      allow update: if (isUser(email) || isAdmin()) 
+      allow update: if (request.auth.token.email == email || isAdmin())
                     && request.resource.data.role == resource.data.role;
     }
-    
+
     // Orders
     match /orders/{orderId} {
       // Read access for employees and admins.
-      allow read: if isEmployee() || isAdmin();
+      allow read: if isEmployee();
 
       // Delete access only for admins.
       allow delete: if isAdmin();
@@ -51,14 +52,24 @@ service cloud.firestore {
                       request.resource.data.delivery_cost == resource.data.delivery_cost
                     );
     }
-    
-    // JAMBS
+
+    // JAMBS - только админы
     match /jambs/{jambId} {
       allow read, write: if isAdmin();
     }
-    
-    // Consolidations
+
+    // Consolidations - только админы
     match /consolidations/{consolidationId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+    
+    // Shipments - только админы
+    match /shipments/{shipmentId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+    
+    // Returns - только админы
+    match /returns/{returnId} {
       allow read, create, update, delete: if isAdmin();
     }
   }
