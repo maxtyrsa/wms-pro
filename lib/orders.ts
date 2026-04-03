@@ -1,6 +1,16 @@
 import { db } from './firebase';
 import { collection, addDoc, query, where, getDocs, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 
+export interface HistoryEntry {
+  status: string;
+  timestamp: string;
+  user: string;
+  action?: 'created' | 'status_changed' | 'added_to_consolidation' | 'removed_from_consolidation';
+  consolidationId?: string;
+  consolidationNumber?: string;
+  comment?: string;
+}
+
 export async function getOrderById(id: string) {
   const docRef = doc(db, 'orders', id);
   const docSnap = await getDoc(docRef);
@@ -20,7 +30,7 @@ export async function updateOrderMoney(id: string, data: {
   await updateDoc(docRef, data);
 }
 
-export async function updateOrderStatus(id: string, newStatus: string, userEmail: string) {
+export async function updateOrderStatus(id: string, newStatus: string, userEmail: string, comment?: string) {
   const docRef = doc(db, 'orders', id);
   const docSnap = await getDoc(docRef);
   if (!docSnap.exists()) throw new Error('Заказ не найден');
@@ -35,12 +45,65 @@ export async function updateOrderStatus(id: string, newStatus: string, userEmail
 
   const updateData: any = {
     status: newStatus,
-    history: [...history, { status: newStatus, timestamp: new Date().toISOString(), user: userEmail }]
+    history: [...history, { 
+      status: newStatus, 
+      timestamp: new Date().toISOString(), 
+      user: userEmail,
+      action: 'status_changed' as const,
+      comment
+    }]
   };
 
   if (newStatus === 'Завершен') {
     updateData.shippedAt = serverTimestamp();
   }
+
+  await updateDoc(docRef, updateData);
+}
+
+export async function addOrderToConsolidation(orderId: string, consolidationId: string, consolidationNumber: string, userEmail: string) {
+  const docRef = doc(db, 'orders', orderId);
+  const docSnap = await getDoc(docRef);
+  if (!docSnap.exists()) throw new Error('Заказ не найден');
+  
+  const order = docSnap.data();
+  const history = order.history || [];
+
+  const updateData: any = {
+    status: 'В консолидации',
+    consolidationId,
+    consolidationNumber,
+    history: [...history, { 
+      status: 'В консолидации', 
+      timestamp: new Date().toISOString(), 
+      user: userEmail,
+      action: 'added_to_consolidation' as const,
+      consolidationId,
+      consolidationNumber
+    }]
+  };
+
+  await updateDoc(docRef, updateData);
+}
+
+export async function removeOrderFromConsolidation(orderId: string, userEmail: string) {
+  const docRef = doc(db, 'orders', orderId);
+  const docSnap = await getDoc(docRef);
+  if (!docSnap.exists()) throw new Error('Заказ не найден');
+  
+  const order = docSnap.data();
+  const history = order.history || [];
+
+  const updateData: any = {
+    consolidationId: null,
+    consolidationNumber: null,
+    history: [...history, { 
+      status: order.status || 'Новый', 
+      timestamp: new Date().toISOString(), 
+      user: userEmail,
+      action: 'removed_from_consolidation' as const
+    }]
+  };
 
   await updateDoc(docRef, updateData);
 }
@@ -74,7 +137,8 @@ export async function createOrderClient(data: {
     {
       status,
       timestamp: createdAt,
-      user: userEmail
+      user: userEmail,
+      action: 'created' as const
     }
   ];
 

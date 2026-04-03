@@ -8,6 +8,7 @@ import { db } from '@/lib/firebase';
 import { collection, addDoc, doc, writeBatch } from 'firebase/firestore';
 import { showToast } from '@/components/Toast';
 import { format } from 'date-fns';
+import { addOrderToConsolidation } from '@/lib/orders';
 
 interface ConsolidationOrder {
   id: string;
@@ -26,9 +27,10 @@ interface CreateConsolidationModalProps {
   onClose: () => void;
   selectedOrders: ConsolidationOrder[];
   onSuccess: () => void;
+  userEmail: string;
 }
 
-export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSuccess }: CreateConsolidationModalProps) {
+export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSuccess, userEmail }: CreateConsolidationModalProps) {
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
     plannedShipmentDate: format(new Date(), 'yyyy-MM-dd'),
@@ -94,15 +96,10 @@ export function CreateConsolidationModal({ isOpen, onClose, selectedOrders, onSu
 
       const docRef = await addDoc(collection(db, 'consolidations'), consolidationData);
 
-      const batch = writeBatch(db);
-      selectedOrders.forEach(order => {
-        const orderRef = doc(db, 'orders', order.id);
-        batch.update(orderRef, {
-          status: 'В консолидации',
-          consolidationId: docRef.id
-        });
-      });
-      await batch.commit();
+      // Обновляем заказы с записью в историю
+      for (const order of selectedOrders) {
+        await addOrderToConsolidation(order.id, docRef.id, consolidationNumber, userEmail || formData.responsiblePerson);
+      }
 
       showToast(`Консоль ${consolidationNumber} успешно создана`, 'success');
       onSuccess();

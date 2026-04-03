@@ -6,7 +6,7 @@ import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
 import { motion } from 'motion/react';
-import { ArrowLeft, Loader2, Package, Truck, Clock, Info, Hash, Weight, Box, CheckCircle2, X, Edit2, Save } from 'lucide-react';
+import { ArrowLeft, Loader2, Package, Truck, Clock, Info, Hash, Weight, Box, CheckCircle2, X, Edit2, Save, Layers } from 'lucide-react';
 import Link from 'next/link';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -28,7 +28,17 @@ interface OrderData {
   payment_sum?: number;
   delivery_cost?: number;
   profit?: number;
-  history?: Array<{ status: string; timestamp: string; user: string }>;
+  consolidationId?: string;
+  consolidationNumber?: string;
+  history?: Array<{ 
+    status: string; 
+    timestamp: string; 
+    user: string;
+    action?: string;
+    consolidationId?: string;
+    consolidationNumber?: string;
+    comment?: string;
+  }>;
 }
 
 const STATUSES = ['Новый', 'Комплектация', 'Ожидает оформления', 'Готов к выдаче', 'Оформлен', 'Отправлен', 'Выдан'];
@@ -222,6 +232,16 @@ export default function AdminOrderDetailsPage() {
               </div>
               <span className="font-bold text-slate-900 dark:text-white">{order.carrier}</span>
             </div>
+
+            {order.consolidationNumber && (
+              <div className="flex items-center justify-between p-4 bg-purple-50 dark:bg-purple-950/30 rounded-2xl">
+                <div className="flex items-center gap-3 text-purple-700 dark:text-purple-300">
+                  <Layers className="w-5 h-5 text-purple-500" />
+                  <span className="font-medium">Находится в консоли</span>
+                </div>
+                <span className="font-bold text-purple-900 dark:text-purple-300">{order.consolidationNumber}</span>
+              </div>
+            )}
 
             <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800 rounded-2xl">
               <div className="flex items-center gap-3 text-slate-700 dark:text-slate-300">
