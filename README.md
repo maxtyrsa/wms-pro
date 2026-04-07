@@ -11,6 +11,8 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://www.typescriptlang.org/)
 [![Firebase](https://img.shields.io/badge/Firebase-Enabled-orange?logo=firebase)](https://firebase.google.com/)
 [![Tailwind](https://img.shields.io/badge/Tailwind-CSS-38bdf8?logo=tailwind-css)](https://tailwindcss.com/)
+![Версия](https://img.shields.io/badge/версия-0.0.0-green)
+![Лицензия](https://img.shields.io/badge/лицензия-MIT-green)
 
 ---
 
