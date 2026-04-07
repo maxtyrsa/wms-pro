@@ -2,9 +2,9 @@
 <img width="524" height="524" alt="GHBanner" src="public/icon.png" />
 </div>
 
-# 📦 WMS Pro — Система Управления Московским складом Kupi-Flakon
+# 📦 Система Управления Московским складом Kupi-Flakon
 
-**Warehouse Management System для Московского склада Kupi-Flakon**
+**Warehouse Management System Kupi-Flakon**
 
 [![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js)](https://nextjs.org/)
 [![React](https://img.shields.io/badge/React-19-blue?logo=react)](https://react.dev/)
