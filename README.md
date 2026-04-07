@@ -1,4 +1,8 @@
-# 📦 WMS Pro — Система Управления Складом
+<div align="center">
+<img width="524" height="524" alt="GHBanner" src="public/icon.png" />
+</div>
+
+# 📦 WMS Pro — Система Управления Московским складом Kupi-Flakon
 
 **Warehouse Management System для Московского склада Kupi-Flakon**
 
