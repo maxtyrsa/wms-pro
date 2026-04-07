@@ -9,7 +9,15 @@ export const metadata: Metadata = {
   title: 'WMS Kupi-Flakon',
   description: 'Warehouse Management System for Kupi-Flakon',
   icons: {
-    icon: '/favicon.ico',
+    // Основная иконка для вкладок браузера
+    icon: [
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/icon.png', type: 'image/png', sizes: '512x512' },
+    ],
+    // Иконка для Apple устройств (при сохранении на главный экран)
+    apple: [
+      { url: '/apple-icon.png', sizes: '180x180', type: 'image/png' },
+    ],
   },
 };
 
