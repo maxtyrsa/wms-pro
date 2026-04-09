@@ -17,7 +17,8 @@ import {
   QueryConstraint,
   startAfter,
   limit,
-  DocumentSnapshot
+  DocumentSnapshot,
+  arrayUnion
 } from 'firebase/firestore';
 import { format, startOfDay, endOfDay, startOfMonth, endOfMonth } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
@@ -26,14 +27,15 @@ import {
   CheckSquare, Square, X, ChevronDown, Package, 
   Clock, Hash, CheckCircle2, ArrowLeft, Trash2,
   ChevronRight, Loader2, Search, XCircle, User, Truck, Weight, Box, Calendar, DollarSign,
-  Edit2, Save, Plus, Minus, Copy, Filter
+  Edit2, Save, Plus, Minus, Copy, Filter, Layers, ExternalLink
 } from 'lucide-react';
 import { showToast } from '@/components/Toast';
 import { ReturnManagement } from '@/components/returns/ReturnManagement';
 import { useInView } from 'react-intersection-observer';
+import Link from 'next/link';
 
 const CARRIERS = ['Все', 'CDEK', 'DPD', 'Деловые линии', 'Почта России', 'ПЭК', 'Самовывоз', 'Образцы', 'OZON_FBS', 'Ярмарка Мастеров', 'Yandex Market', 'WB_FBS', 'AliExpress', 'Бийск', 'OZON_FBO', 'WB_FBO'];
-const STATUSES = ['Все', 'Новый', 'Комплектация', 'Ожидает оформления', 'Готов к выдаче', 'Оформлен', 'Отправлен', 'Завершен', 'Выдан', 'Запрошен возврат', 'Возврат одобрен', 'Возврат получен', 'На повторной обработке', 'Повторная отправка'];
+const STATUSES = ['Все', 'Новый', 'Комплектация', 'Ожидает оформления', 'Готов к выдаче', 'Оформлен', 'Отправлен', 'Завершен', 'Выдан', 'В консолидации', 'Запрошен возврат', 'Возврат одобрен', 'Возврат получен', 'На повторной обработке', 'Повторная отправка'];
 
 const PAGE_SIZE = 20;
 
@@ -61,7 +63,17 @@ interface Order {
   time_start?: any;
   time_end?: any;
   places_data?: Place[];
-  history?: any[];
+  history?: Array<{
+    status: string;
+    timestamp: any;
+    user: string;
+    action?: string;
+    consolidationId?: string;
+    consolidationNumber?: string;
+    comment?: string;
+  }>;
+  consolidationId?: string;
+  consolidationNumber?: string;
 }
 
 interface Filters {
@@ -305,11 +317,17 @@ export default function AdminOrdersPage() {
     setBulkUpdating(true);
     try {
       const batch = writeBatch(db);
+      const historyEntry = {
+        status: newStatus,
+        timestamp: serverTimestamp(),
+        user: user?.email || 'system',
+      };
       selectedOrders.forEach(id => {
         const orderRef = doc(db, 'orders', id);
         const updateData: any = {
           status: newStatus,
-          lastUpdated: serverTimestamp()
+          lastUpdated: serverTimestamp(),
+          history: arrayUnion(historyEntry),
         };
         if (newStatus === 'Отправлен') updateData.shippedAt = serverTimestamp();
         if (newStatus === 'Выдан') updateData.issuedAt = serverTimestamp();
@@ -334,13 +352,25 @@ export default function AdminOrdersPage() {
     setUpdatingStatusId(id);
     try {
       const orderRef = doc(db, 'orders', id);
-      const updateData: any = { status: newStatus };
+      const historyEntry = {
+        status: newStatus,
+        timestamp: serverTimestamp(),
+        user: user?.email || 'system',
+      };
+      const updateData: any = { 
+        status: newStatus,
+        history: arrayUnion(historyEntry),
+      };
       if (newStatus === 'Отправлен') updateData.shippedAt = serverTimestamp();
       if (newStatus === 'Выдан') updateData.issuedAt = serverTimestamp();
       await updateDoc(orderRef, updateData);
       
       if (selectedOrderDetails?.id === id) {
-        setSelectedOrderDetails({ ...selectedOrderDetails, status: newStatus });
+        const updatedHistory = [
+          ...(selectedOrderDetails.history || []),
+          { ...historyEntry, timestamp: new Date() }
+        ];
+        setSelectedOrderDetails({ ...selectedOrderDetails, status: newStatus, history: updatedHistory });
       }
       
       showToast(`Статус заказа изменен на "${newStatus}"`, 'success');
@@ -414,6 +444,14 @@ export default function AdminOrdersPage() {
         lastEdited: serverTimestamp(),
         lastEditedBy: user?.email
       };
+
+      if (editFormData.status !== selectedOrderDetails.status) {
+        updateData.history = arrayUnion({
+          status: editFormData.status,
+          timestamp: serverTimestamp(),
+          user: user?.email || 'system',
+        });
+      }
       
       if (editingPlaces.length > 0) {
         updateData.places_data = editingPlaces;
@@ -556,6 +594,7 @@ export default function AdminOrdersPage() {
       case 'Оформлен': return 'bg-cyan-100 text-cyan-800 border-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-300';
       case 'Отправлен': return 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300';
       case 'Выдан': return 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300';
+      case 'В консолидации': return 'bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300';
       case 'Завершен': return 'bg-slate-200 text-slate-800 border-slate-300 dark:bg-slate-800 dark:text-slate-300';
       case 'Запрошен возврат': return 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300';
       case 'Возврат одобрен': return 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300';
@@ -583,6 +622,15 @@ export default function AdminOrdersPage() {
       return order.places_data.reduce((acc, p) => acc + (Number(p.weight) || 0), 0);
     }
     return 0;
+  };
+
+  const formatHistoryTimestamp = (timestamp: any) => {
+    if (!timestamp) return '-';
+    if (typeof timestamp.toDate === 'function') return format(timestamp.toDate(), 'dd.MM.yyyy HH:mm');
+    if (timestamp instanceof Date) return format(timestamp, 'dd.MM.yyyy HH:mm');
+    if (typeof timestamp === 'string') return format(new Date(timestamp), 'dd.MM.yyyy HH:mm');
+    if (timestamp.seconds) return format(new Date(timestamp.seconds * 1000), 'dd.MM.yyyy HH:mm');
+    return '-';
   };
 
   return (
@@ -861,7 +909,7 @@ export default function AdminOrdersPage() {
         </div>
       </div>
 
-      {/* Модальное окно деталей заказа (остается без изменений) */}
+      {/* Модальное окно деталей заказа */}
       <AnimatePresence>
         {selectedOrderDetails && (
           <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-sm" onClick={() => { setSelectedOrderDetails(null); closeEditMode(); }}>
@@ -873,7 +921,6 @@ export default function AdminOrdersPage() {
               onClick={(e) => e.stopPropagation()} 
               className="bg-white dark:bg-slate-900 h-full w-full max-w-2xl shadow-2xl flex flex-col relative"
             >
-              {/* ... содержимое модального окна остается без изменений ... */}
               <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
                 <div>
                   <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
@@ -988,6 +1035,23 @@ export default function AdminOrdersPage() {
                 ) : (
                   // Режим просмотра
                   <div className="space-y-6">
+                    {(selectedOrderDetails.consolidationNumber || selectedOrderDetails.consolidationId) && (
+                      <Link href="/admin/consolidations" className="block group">
+                        <div className="p-4 bg-purple-50 dark:bg-purple-950/30 border border-purple-100 dark:border-purple-800/50 rounded-2xl transition-all hover:shadow-md">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <Layers className="w-5 h-5 text-purple-600" />
+                              <div>
+                                <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest">В консолидации</p>
+                                <p className="font-bold text-purple-900 dark:text-purple-300">{selectedOrderDetails.consolidationNumber || selectedOrderDetails.consolidationId}</p>
+                              </div>
+                            </div>
+                            <ExternalLink className="w-4 h-4 text-purple-400 group-hover:text-purple-600 transition-colors" />
+                          </div>
+                        </div>
+                      </Link>
+                    )}
+
                     <div className="grid grid-cols-2 gap-4">
                       <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-2xl">
                         <div className="flex items-center gap-2 text-slate-500 mb-1"><User className="w-4 h-4" /><span className="text-[10px] font-black">Сборщик</span></div>
@@ -1050,13 +1114,46 @@ export default function AdminOrdersPage() {
                     {selectedOrderDetails.history && selectedOrderDetails.history.length > 0 && (
                       <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
                         <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2 mb-3"><Clock className="w-4 h-4 text-slate-400" />История изменений</h3>
-                        <div className="space-y-2 max-h-48 overflow-y-auto">
-                          {selectedOrderDetails.history.slice().reverse().map((item: any, idx: number) => (
-                            <div key={idx} className="flex items-start gap-3 p-2 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                              <div className="w-2 h-2 mt-1.5 rounded-full bg-blue-500 shrink-0"></div>
-                              <div className="flex-1"><div className="flex justify-between"><span className={`px-2 py-0.5 rounded text-[10px] font-bold ${getStatusColor(item.status)}`}>{item.status}</span><span className="text-[10px] text-slate-500">{format(new Date(item.timestamp), 'dd.MM.yyyy HH:mm')}</span></div><p className="text-[10px] text-slate-500 mt-0.5">{item.user}</p></div>
-                            </div>
-                          ))}
+                        <div className="space-y-2 max-h-64 overflow-y-auto">
+                          {selectedOrderDetails.history.slice().reverse().map((item: any, idx: number) => {
+                            const isConsolidationEvent = item.action === 'added_to_consolidation' || item.action === 'removed_from_consolidation';
+                            
+                            return (
+                              <div key={idx} className={`flex items-start gap-3 p-3 rounded-xl ${isConsolidationEvent ? 'bg-purple-50/50 dark:bg-purple-900/10' : 'bg-slate-50 dark:bg-slate-800'}`}>
+                                <div className={`w-2 h-2 mt-2 rounded-full shrink-0 ${isConsolidationEvent ? 'bg-purple-500' : 'bg-blue-500'}`}></div>
+                                <div className="flex-1">
+                                  <div className="flex items-center justify-between mb-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${isConsolidationEvent ? 'bg-purple-100 text-purple-700' : getStatusColor(item.status)}`}>
+                                        {isConsolidationEvent 
+                                          ? (item.action === 'added_to_consolidation' ? 'Добавлен в консоль' : 'Удален из консоли') 
+                                          : item.status}
+                                      </span>
+                                    </div>
+                                    <span className="text-[10px] text-slate-500 font-medium">
+                                      {formatHistoryTimestamp(item.timestamp)}
+                                    </span>
+                                  </div>
+                                  
+                                  {item.consolidationNumber && (
+                                    <p className="text-xs font-bold text-purple-600 dark:text-purple-400 mb-1">
+                                      {item.consolidationNumber}
+                                    </p>
+                                  )}
+                                  
+                                  {item.comment && (
+                                    <p className="text-xs text-slate-600 dark:text-slate-400 italic mb-1">
+                                      "{item.comment}"
+                                    </p>
+                                  )}
+                                  
+                                  <p className="text-[10px] text-slate-400">
+                                    {item.user}
+                                  </p>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
