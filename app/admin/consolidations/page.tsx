@@ -1,5 +1,4 @@
-// app/admin/consolidations/page.tsx - исправленная версия
-
+// app/admin/consolidations/page.tsx
 'use client';
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
@@ -24,6 +23,7 @@ import {
   limit, 
   startAfter, 
   DocumentSnapshot,
+  getDoc,
   Timestamp
 } from 'firebase/firestore';
 import { format, startOfDay, endOfDay, isWithinInterval, startOfMonth, endOfMonth } from 'date-fns';
@@ -77,9 +77,8 @@ const STATUS_CONFIG = {
 
 export default function ConsolidationsPage() {
   const router = useRouter();
-  const { role, loading: authLoading } = useAuth();
+  const { role, loading: authLoading, user } = useAuth();
   
-  // Состояния для данных
   const [consolidations, setConsolidations] = useState<Consolidation[]>([]);
   const [lastDoc, setLastDoc] = useState<DocumentSnapshot | null>(null);
   const [hasMore, setHasMore] = useState(true);
@@ -90,7 +89,6 @@ export default function ConsolidationsPage() {
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [availableOrders, setAvailableOrders] = useState<any[]>([]);
   
-  // Фильтры
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [dateFilter, setDateFilter] = useState<{ start: string; end: string }>(() => ({
@@ -99,20 +97,16 @@ export default function ConsolidationsPage() {
   }));
   const [showDateFilter, setShowDateFilter] = useState(false);
   
-  // Refs для предотвращения бесконечных циклов
   const isInitialLoadRef = useRef(true);
   const isLoadingRef = useRef(false);
 
-  // Проверка авторизации
   useEffect(() => {
     if (!authLoading && role !== 'admin') {
       router.push('/');
     }
   }, [authLoading, role, router]);
 
-  // Загрузка консолей
   const loadConsolidations = useCallback(async (loadMore = false) => {
-    // Предотвращаем одновременную загрузку
     if (isLoadingRef.current) return;
     if (loadMore && !hasMore) return;
     
@@ -162,7 +156,6 @@ export default function ConsolidationsPage() {
     }
   }, [statusFilter, lastDoc, hasMore]);
 
-  // Загрузка доступных заказов
   const fetchAvailableOrders = useCallback(async () => {
     try {
       const q = query(
@@ -177,15 +170,13 @@ export default function ConsolidationsPage() {
     }
   }, []);
 
-  // Загрузка при монтировании и смене статус-фильтра
   useEffect(() => {
     if (role === 'admin') {
       loadConsolidations();
       fetchAvailableOrders();
     }
-  }, [role, statusFilter, loadConsolidations, fetchAvailableOrders]); // Добавлены зависимости
+  }, [role, statusFilter, loadConsolidations, fetchAvailableOrders]);
 
-  // Фильтрация на клиенте (поиск и дата)
   const filteredConsolidations = useMemo(() => {
     let filtered = [...consolidations];
     
@@ -208,9 +199,13 @@ export default function ConsolidationsPage() {
     return filtered;
   }, [consolidations, searchQuery, dateFilter]);
 
-  // Отметить консоль как отправленную
+  // 🔥 ИСПРАВЛЕНО: Отметить консоль как отправленную с записью в историю каждого заказа
   const handleMarkAsShipped = async (consolidation: Consolidation) => {
     if (!confirm(`Подтвердить отправку консоли ${consolidation.consolidationNumber}?`)) return;
+    if (!user?.email) {
+      showToast('Ошибка: пользователь не авторизован', 'error');
+      return;
+    }
     
     setUpdatingId(consolidation.id);
     
@@ -218,23 +213,49 @@ export default function ConsolidationsPage() {
       const consolidationRef = doc(db, 'consolidations', consolidation.id);
       const now = new Date().toISOString();
       
+      // Обновляем статус консоли
       await updateDoc(consolidationRef, {
         status: 'shipped',
         actualShipmentDate: now,
-        updatedAt: now
+        updatedAt: now,
+        updatedBy: user.email
       });
       
+      // 🔥 ВАЖНО: Обновляем статус КАЖДОГО заказа с записью в историю
       const batch = writeBatch(db);
-      consolidation.orders.forEach((order: any) => {
+      
+      for (const order of consolidation.orders) {
         const orderRef = doc(db, 'orders', order.id);
-        batch.update(orderRef, { 
+        
+        // Получаем текущие данные заказа для истории
+        const orderSnap = await getDoc(orderRef);
+        const orderData = orderSnap.data();
+        const currentHistory = orderData?.history || [];
+        
+        // Создаем запись в историю
+        const historyEntry = {
           status: 'Отправлен',
-          shippedAt: Timestamp.now()
+          timestamp: now,
+          user: user.email,
+          action: 'status_changed',
+          comment: `Отправлен в консоли ${consolidation.consolidationNumber}`
+        };
+        
+        const updatedHistory = [...currentHistory, historyEntry];
+        
+        batch.update(orderRef, {
+          status: 'Отправлен',
+          history: updatedHistory,
+          shippedAt: now,
+          lastStatusUpdate: now,
+          lastStatusUpdateBy: user.email,
+          previousStatus: orderData?.status || 'В консолидации'
         });
-      });
+      }
+      
       await batch.commit();
       
-      showToast(`✅ Консоль ${consolidation.consolidationNumber} отправлена`, 'success');
+      showToast(`✅ Консоль ${consolidation.consolidationNumber} отправлена. Статусы заказов обновлены.`, 'success');
       
       // Обновляем локальное состояние
       setConsolidations(prev => prev.map(c => 
@@ -253,30 +274,60 @@ export default function ConsolidationsPage() {
     }
   };
 
-  // Отменить консоль
+  // 🔥 ИСПРАВЛЕНО: Отменить консоль с возвратом заказов в статус "Оформлен" и записью в историю
   const handleCancelConsolidation = async (consolidation: Consolidation) => {
     if (!confirm(`Отменить консоль ${consolidation.consolidationNumber}?`)) return;
+    if (!user?.email) {
+      showToast('Ошибка: пользователь не авторизован', 'error');
+      return;
+    }
     
     setUpdatingId(consolidation.id);
     
     try {
       const consolidationRef = doc(db, 'consolidations', consolidation.id);
+      const now = new Date().toISOString();
+      
       await updateDoc(consolidationRef, {
         status: 'cancelled',
-        cancelledAt: new Date().toISOString()
+        cancelledAt: now,
+        updatedBy: user.email
       });
       
+      // 🔥 Возвращаем заказы в статус "Оформлен" с записью в историю
       const batch = writeBatch(db);
-      consolidation.orders.forEach((order: any) => {
+      
+      for (const order of consolidation.orders) {
         const orderRef = doc(db, 'orders', order.id);
-        batch.update(orderRef, { 
+        
+        const orderSnap = await getDoc(orderRef);
+        const orderData = orderSnap.data();
+        const currentHistory = orderData?.history || [];
+        
+        const historyEntry = {
           status: 'Оформлен',
-          consolidationId: null
+          timestamp: now,
+          user: user.email,
+          action: 'status_changed',
+          comment: `Консоль ${consolidation.consolidationNumber} отменена`
+        };
+        
+        const updatedHistory = [...currentHistory, historyEntry];
+        
+        batch.update(orderRef, {
+          status: 'Оформлен',
+          consolidationId: null,
+          consolidationNumber: null,
+          history: updatedHistory,
+          lastStatusUpdate: now,
+          lastStatusUpdateBy: user.email,
+          previousStatus: orderData?.status || 'В консолидации'
         });
-      });
+      }
+      
       await batch.commit();
       
-      showToast(`🔄 Консоль ${consolidation.consolidationNumber} отменена`, 'warning');
+      showToast(`🔄 Консоль ${consolidation.consolidationNumber} отменена. Заказы возвращены в статус "Оформлен".`, 'warning');
       
       setConsolidations(prev => prev.map(c => 
         c.id === consolidation.id 
@@ -304,6 +355,7 @@ export default function ConsolidationsPage() {
   };
 
   const clearSearch = () => setSearchQuery('');
+  
   const resetDateFilter = () => {
     setDateFilter({
       start: format(startOfMonth(new Date()), 'yyyy-MM-dd'),

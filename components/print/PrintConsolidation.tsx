@@ -1,5 +1,4 @@
-// components/print/PrintConsolidation.tsx - исправленная версия
-
+// components/print/PrintConsolidation.tsx
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
@@ -14,6 +13,7 @@ import {
 import { updateDoc, doc, writeBatch, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { showToast } from '@/components/Toast';
+import { useAuth } from '@/context/AuthContext';
 
 interface Order {
   id: string;
@@ -24,8 +24,8 @@ interface Order {
   profit?: number;
   carrier?: string;
   status?: string;
-  createdBy?: string;  // 
-  payment_sum?: number; // 
+  createdBy?: string;
+  payment_sum?: number;
 }
 
 interface Consolidation {
@@ -59,6 +59,7 @@ export function PrintConsolidation({
   onUpdate,
   availableOrders 
 }: PrintConsolidationProps) {
+  const { user } = useAuth();
   const printRef = useRef<HTMLDivElement>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [currentOrders, setCurrentOrders] = useState<Order[]>(consolidation.orders);
@@ -82,26 +83,23 @@ export function PrintConsolidation({
 
   const [totals, setTotals] = useState(() => calculateTotals(currentOrders));
 
-  // Обновление итогов при изменении заказов
   const updateTotals = (orders: Order[]) => {
     const newTotals = calculateTotals(orders);
     setTotals(newTotals);
     return newTotals;
   };
 
-  // Фильтрация доступных заказов (исключаем уже добавленные)
+  // Фильтрация доступных заказов
   const availableForAdd = availableOrders.filter(order => 
     !currentOrders.some(o => o.id === order.id) && order.carrier === consolidation.carrier
   );
 
-  // Поиск в доступных заказах
   const filteredAvailableOrders = availableForAdd.filter(order => {
     if (!searchQuery.trim()) return true;
     const queryLower = searchQuery.trim().toLowerCase();
     return order.orderNumber?.toLowerCase().includes(queryLower);
   });
 
-  // Выделение заказов для добавления
   const toggleOrderSelection = (orderId: string) => {
     const newSelection = new Set(selectedOrderIds);
     if (newSelection.has(orderId)) {
@@ -120,7 +118,7 @@ export function PrintConsolidation({
     }
   };
 
-  // Добавление выбранных заказов
+  // 🔥 ИСПРАВЛЕНО: Добавление заказов с правильной записью consolidationNumber
   const handleAddSelectedOrders = async () => {
     if (selectedOrderIds.size === 0) {
       showToast('Выберите заказы для добавления', 'error');
@@ -135,7 +133,7 @@ export function PrintConsolidation({
       const newOrders = [...currentOrders, ...ordersToAdd];
       const newTotals = updateTotals(newOrders);
       
-      // Обновляем в Firebase
+      // Обновляем консоль в Firebase
       const consolidationRef = doc(db, 'consolidations', consolidation.id);
       await updateDoc(consolidationRef, {
         orders: newOrders.map(o => ({
@@ -155,16 +153,36 @@ export function PrintConsolidation({
         updatedAt: new Date().toISOString()
       });
 
-      // Обновляем статусы заказов
+      // 🔥 Обновляем КАЖДЫЙ заказ с consolidationNumber
       const batch = writeBatch(db);
-      ordersToAdd.forEach(order => {
+      for (const order of ordersToAdd) {
         const orderRef = doc(db, 'orders', order.id);
+        
+        const orderSnap = await getDoc(orderRef);
+        const orderData = orderSnap.data();
+        const currentHistory = orderData?.history || [];
+        
+        const historyEntry = {
+          status: 'В консолидации',
+          timestamp: new Date().toISOString(),
+          user: user?.email || 'admin',
+          action: 'added_to_consolidation',
+          consolidationId: consolidation.id,
+          consolidationNumber: consolidation.consolidationNumber
+        };
+        
+        const updatedHistory = [...currentHistory, historyEntry];
+        
         batch.update(orderRef, {
           status: 'В консолидации',
           consolidationId: consolidation.id,
-          consolidatedAt: new Date().toISOString()
+          consolidationNumber: consolidation.consolidationNumber, // 🔥 КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ
+          history: updatedHistory,
+          consolidatedAt: new Date().toISOString(),
+          consolidatedBy: user?.email || 'admin',
+          previousStatus: orderData?.status || 'Оформлен'
         });
-      });
+      }
       await batch.commit();
 
       setCurrentOrders(newOrders);
@@ -172,7 +190,7 @@ export function PrintConsolidation({
       setSearchQuery('');
       setShowAddModal(false);
       
-      showToast(`✅ Добавлено ${ordersToAdd.length} заказов в консоль`, 'success');
+      showToast(`✅ Добавлено ${ordersToAdd.length} заказов в консоль ${consolidation.consolidationNumber}`, 'success');
       onUpdate();
     } catch (error) {
       console.error('Error adding orders to consolidation:', error);
@@ -194,7 +212,7 @@ export function PrintConsolidation({
       const newOrders = currentOrders.filter(o => o.id !== orderId);
       const newTotals = updateTotals(newOrders);
       
-      // Обновляем в Firebase
+      // Обновляем консоль
       const consolidationRef = doc(db, 'consolidations', consolidation.id);
       await updateDoc(consolidationRef, {
         orders: newOrders,
@@ -207,9 +225,26 @@ export function PrintConsolidation({
 
       // Возвращаем заказ в статус "Оформлен"
       const orderRef = doc(db, 'orders', orderId);
+      const orderSnap = await getDoc(orderRef);
+      const orderData = orderSnap.data();
+      const currentHistory = orderData?.history || [];
+      
+      const historyEntry = {
+        status: 'Оформлен',
+        timestamp: new Date().toISOString(),
+        user: user?.email || 'admin',
+        action: 'removed_from_consolidation'
+      };
+      
+      const updatedHistory = [...currentHistory, historyEntry];
+
       await updateDoc(orderRef, {
         status: 'Оформлен',
-        consolidationId: null
+        consolidationId: null,
+        consolidationNumber: null,
+        history: updatedHistory,
+        previousStatus: null,
+        lastUpdated: new Date().toISOString()
       });
 
       setCurrentOrders(newOrders);
@@ -223,7 +258,7 @@ export function PrintConsolidation({
     }
   };
 
-  // Сохранение изменений (для ручного режима)
+  // Сохранение изменений
   const handleSaveChanges = async () => {
     setLoading(true);
     try {
@@ -248,7 +283,6 @@ export function PrintConsolidation({
     }
   };
 
-  // Отмена редактирования
   const handleCancelEdit = () => {
     setCurrentOrders(consolidation.orders);
     setTotals(calculateTotals(consolidation.orders));
@@ -256,7 +290,6 @@ export function PrintConsolidation({
     setShowAddModal(false);
   };
 
-  // Форматирование
   const formatDate = (dateStr: string) => {
     if (!dateStr) return '—';
     try {
@@ -275,21 +308,12 @@ export function PrintConsolidation({
     }
   };
 
-  const formatWeight = (weight: number) => {
-    return weight.toFixed(1).replace('.', ',');
-  };
-
-  const formatVolume = (volume: number) => {
-    return volume.toFixed(6).replace('.', ',');
-  };
-
-  const formatProfit = (profit: number) => {
-    return profit.toLocaleString('ru-RU');
-  };
+  const formatWeight = (weight: number) => weight.toFixed(1).replace('.', ',');
+  const formatVolume = (volume: number) => volume.toFixed(6).replace('.', ',');
+  const formatProfit = (profit: number) => profit.toLocaleString('ru-RU');
 
   const totalPlaces = currentOrders.reduce((sum, o) => sum + (o.quantity || 0), 0);
 
-  // Печать
   const handlePrint = () => {
     const printContent = printRef.current;
     if (!printContent) return;
@@ -396,7 +420,7 @@ export function PrintConsolidation({
             </div>
           </div>
 
-          {/* Содержимое */}
+          {/* Содержимое для печати */}
           <div className="flex-1 overflow-auto p-6 bg-gray-100">
             <div ref={printRef} className="bg-white shadow-xl rounded-lg overflow-hidden">
               <div className="p-8 font-sans text-sm">
@@ -570,7 +594,7 @@ export function PrintConsolidation({
         </div>
       </div>
 
-      {/* Модальное окно добавления заказов (обновленное) */}
+      {/* Модальное окно добавления заказов */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[60]">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
@@ -593,7 +617,6 @@ export function PrintConsolidation({
             </div>
             
             <div className="p-4 space-y-4 flex-1 overflow-auto">
-              {/* Поиск */}
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                 <input
@@ -610,12 +633,11 @@ export function PrintConsolidation({
                   <AlertCircle className="w-12 h-12 mx-auto mb-2 text-gray-300" />
                   <p>Нет доступных заказов для добавления</p>
                   <p className="text-xs mt-1">
-                    Доступны только заказы со статусом &quot;Оформлен&quot; и ТК &quot;{consolidation.carrier}&quot;
+                    Доступны только заказы со статусом "Оформлен" и ТК "{consolidation.carrier}"
                   </p>
                 </div>
               ) : (
                 <>
-                  {/* Выделение всех */}
                   <div className="flex items-center justify-between pb-2 border-b border-gray-100">
                     <button
                       onClick={toggleAllSelection}
@@ -633,7 +655,6 @@ export function PrintConsolidation({
                     </span>
                   </div>
                   
-                  {/* Список заказов */}
                   <div className="space-y-2 max-h-96 overflow-y-auto">
                     {filteredAvailableOrders.map(order => (
                       <div

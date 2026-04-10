@@ -11,6 +11,8 @@ import Link from 'next/link';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { showToast } from '@/components/Toast';
+// 🔥 Импортируем функцию для обновления статуса
+import { updateOrderStatus } from '@/lib/orders';
 
 interface OrderData {
   id: string;
@@ -41,7 +43,7 @@ interface OrderData {
   }>;
 }
 
-const STATUSES = ['Новый', 'Комплектация', 'Ожидает оформления', 'Готов к выдаче', 'Оформлен', 'Отправлен', 'Выдан'];
+const STATUSES = ['Новый', 'Комплектация', 'Ожидает оформления', 'Готов к выдаче', 'Оформлен', 'Отправлен', 'Выдан', 'В консолидации'];
 
 export default function AdminOrderDetailsPage() {
   const params = useParams();
@@ -95,30 +97,32 @@ export default function AdminOrderDetailsPage() {
     fetchOrder();
   }, [id]);
 
+  // 🔥 ИСПРАВЛЕНО: Используем функцию updateOrderStatus из lib/orders
   const handleStatusChange = async (newStatus: string) => {
-    if (!order) return;
+    if (!order || !user?.email) return;
     
     setUpdating(true);
     try {
-      const orderRef = doc(db, 'orders', order.id);
-      const updateData: any = { 
-        status: newStatus,
-        history: [...(order.history || []), {
+      // Вызываем централизованную функцию с записью в историю
+      await updateOrderStatus(order.id, newStatus, user.email);
+      
+      // Обновляем локальное состояние
+      setOrder(prev => {
+        if (!prev) return prev;
+        const currentHistory = prev.history || [];
+        const newHistoryEntry = {
           status: newStatus,
           timestamp: new Date().toISOString(),
-          user: user?.email || 'admin'
-        }]
-      };
+          user: user.email || 'admin',
+          action: 'status_changed'
+        };
+        return {
+          ...prev,
+          status: newStatus,
+          history: [...currentHistory, newHistoryEntry]
+        };
+      });
       
-      if (newStatus === 'Отправлен') {
-        updateData.shippedAt = serverTimestamp();
-      }
-      if (newStatus === 'Выдан') {
-        updateData.issuedAt = serverTimestamp();
-      }
-      
-      await updateDoc(orderRef, updateData);
-      setOrder({ ...order, ...updateData });
       showToast(`Статус изменен на "${newStatus}"`, 'success');
     } catch (error) {
       console.error('Error updating status:', error);
@@ -161,6 +165,7 @@ export default function AdminOrderDetailsPage() {
       case 'Оформлен': return 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-300';
       case 'Отправлен': return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300';
       case 'Выдан': return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300';
+      case 'В консолидации': return 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300';
       default: return 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300';
     }
   };
@@ -198,7 +203,7 @@ export default function AdminOrderDetailsPage() {
   const totalWeight = order.totalWeight || order.places_data?.reduce((acc, p) => acc + p.weight, 0) || 0;
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 pb-20">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 pb-20 transition-colors duration-200">
       <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 py-4 sticky top-0 z-10 flex items-center gap-4">
         <button onClick={() => router.back()} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
           <ArrowLeft className="w-6 h-6 text-slate-600 dark:text-slate-400" />
@@ -233,6 +238,7 @@ export default function AdminOrderDetailsPage() {
               <span className="font-bold text-slate-900 dark:text-white">{order.carrier}</span>
             </div>
 
+            {/* 🔥 Блок информации о консолидации */}
             {order.consolidationNumber && (
               <div className="flex items-center justify-between p-4 bg-purple-50 dark:bg-purple-950/30 rounded-2xl">
                 <div className="flex items-center gap-3 text-purple-700 dark:text-purple-300">
@@ -294,7 +300,11 @@ export default function AdminOrderDetailsPage() {
                     : `bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700`
                 } disabled:opacity-50`}
               >
-                {status}
+                {updating && order.status !== status ? (
+                  <Loader2 className="w-4 h-4 animate-spin inline" />
+                ) : (
+                  status
+                )}
               </button>
             ))}
           </div>
@@ -427,7 +437,7 @@ export default function AdminOrderDetailsPage() {
           </motion.div>
         )}
 
-        {/* История изменений */}
+        {/* 🔥 История изменений - ТАБЛИЦА */}
         {order.history && order.history.length > 0 && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
@@ -436,27 +446,36 @@ export default function AdminOrderDetailsPage() {
           >
             <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
               <Clock className="w-5 h-5 text-slate-400" />
-              История изменений
+              История изменений статусов
             </h2>
-            <div className="space-y-2">
-              {order.history.slice().reverse().map((item, idx) => (
-                <div key={idx} className="flex items-start gap-3 p-3 bg-slate-50 dark:bg-slate-800 rounded-xl">
-                  <div className="w-2 h-2 mt-2 rounded-full bg-blue-500 shrink-0"></div>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between flex-wrap gap-2">
-                      <span className={`px-2 py-0.5 rounded text-xs font-bold ${getStatusColor(item.status)}`}>
-                        {item.status}
-                      </span>
-                      <span className="text-xs text-slate-500 dark:text-slate-400">
-                        {format(new Date(item.timestamp), 'dd.MM.yyyy HH:mm')}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      {item.user}
-                    </p>
-                  </div>
-                </div>
-              ))}
+            
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-700 text-left">
+                    <th className="py-2 px-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Статус</th>
+                    <th className="py-2 px-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Дата и время</th>
+                    <th className="py-2 px-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Пользователь</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {[...order.history].reverse().map((item, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                      <td className="py-2 px-2">
+                        <span className={`px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap ${getStatusColor(item.status)}`}>
+                          {item.status}
+                        </span>
+                      </td>
+                      <td className="py-2 px-2 text-slate-600 dark:text-slate-400 font-mono text-xs whitespace-nowrap">
+                        {item.timestamp ? format(new Date(item.timestamp), 'dd.MM.yyyy HH:mm:ss') : '—'}
+                      </td>
+                      <td className="py-2 px-2 text-slate-700 dark:text-slate-300 text-xs">
+                        {item.user?.split('@')[0] || item.user || 'Система'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </motion.div>
         )}

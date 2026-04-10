@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { doc, onSnapshot, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
 import { motion } from 'motion/react';
@@ -21,6 +21,8 @@ import {
 import Link from 'next/link';
 import { showToast } from '@/components/Toast';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
+// 🔥 Импортируем функции для работы со статусами
+import { startOrderAssembly, finishOrderAssembly } from '@/lib/orders';
 
 interface OrderData {
   orderNumber?: string;
@@ -85,15 +87,12 @@ export default function AssemblyPage() {
     };
   }, [id]);
 
+  // 🔥 ИСПРАВЛЕНО: Используем функцию из lib/orders для начала сборки
   const handleStart = async () => {
-    if (!id || !user) return;
+    if (!id || !user?.email) return;
     setStarting(true);
     try {
-      const docRef = doc(db, 'orders', id as string);
-      await updateDoc(docRef, {
-        time_start: serverTimestamp(),
-        status: 'В работе'
-      });
+      await startOrderAssembly(id as string, user.email);
       showToast('Сборка начата', 'success');
     } catch (err) {
       console.error('Error starting assembly:', err);
@@ -103,27 +102,18 @@ export default function AssemblyPage() {
     }
   };
 
+  // 🔥 ИСПРАВЛЕНО: Используем функцию из lib/orders для завершения сборки
   const handleFinish = async () => {
-    if (!id || !user || !order) return;
+    if (!id || !user?.email || !order) return;
     setFinishing(true);
     try {
-      const docRef = doc(db, 'orders', id as string);
+      await finishOrderAssembly(id as string, user.email);
+      showToast('Сборка завершена!', 'success');
       
+      // Перенаправление в зависимости от типа заказа
       if (order.carrier === 'Самовывоз') {
-        await updateDoc(docRef, {
-          time_end: serverTimestamp(),
-          status: 'Готов к выдаче'
-        });
-        showToast('Сборка завершена! Заказ готов к выдаче', 'success');
         router.push('/');
       } else {
-        await updateDoc(docRef, {
-          time_end: serverTimestamp(),
-          status: 'Комплектация'
-        });
-        showToast('Сборка завершена!', 'success');
-        // После завершения сборки переходим на страницу редактирования
-        // для всех пользователей (и сотрудника, и администратора)
         router.push(`/employee/edit_order/${id}`);
       }
     } catch (err) {
@@ -219,7 +209,6 @@ export default function AssemblyPage() {
             </div>
           </div>
 
-          {/* Кнопка редактирования (только если сборка не начата) */}
           {!isStarted && !isFinished && (
             <button
               onClick={() => router.push(`/employee/edit_order/${id}`)}
