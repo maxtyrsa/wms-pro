@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { doc, onSnapshot, updateDoc, arrayUnion } from 'firebase/firestore';
+import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
 import { motion, AnimatePresence } from 'motion/react';
@@ -16,8 +16,10 @@ import {
   Loader2
 } from 'lucide-react';
 import Link from 'next/link';
+import { showToast } from '@/components/Toast';
+// 🔥 Импортируем функцию для сохранения габаритов с обновлением статуса
+import { saveDimensionsAndUpdateStatus } from '@/lib/orders';
 
-// Изменяем интерфейс, чтобы стейт мог временно держать строку при вводе
 interface PlaceData {
   d: number | string;
   w: number | string;
@@ -95,7 +97,6 @@ export default function AddDimensionsPage() {
   }, [places]);
 
   const handleInputChange = (index: number, field: keyof PlaceData, value: string) => {
-    // Разрешаем ввод пустой строки, точки или нуля в начале для дробных чисел
     const newPlaces = [...places];
     newPlaces[index] = { ...newPlaces[index], [field]: value };
     setPlaces(newPlaces);
@@ -148,8 +149,21 @@ export default function AddDimensionsPage() {
     setError(null);
   };
 
+  // 🔥 ИСПРАВЛЕНО: Используем функцию saveDimensionsAndUpdateStatus из lib/orders
   const handleSave = async () => {
-    // Валидация: переводим в числа перед проверкой
+    // Валидация максимального веса места (25 кг)
+    const MAX_WEIGHT_PER_PLACE = 25;
+    
+    const invalidPlace = places.find(p => parseFloat(String(p.weight)) > MAX_WEIGHT_PER_PLACE);
+    
+    if (invalidPlace) {
+      const placeIndex = places.indexOf(invalidPlace) + 1;
+      setError(`Ошибка: Вес места №${placeIndex} превышает ${MAX_WEIGHT_PER_PLACE} кг.`);
+      showToast(`Вес одного места не может превышать ${MAX_WEIGHT_PER_PLACE} кг`, 'error');
+      return;
+    }
+
+    // Валидация на отрицательные/нулевые значения
     const invalid = places.some(p => 
       parseFloat(String(p.d)) <= 0 || 
       parseFloat(String(p.w)) <= 0 || 
@@ -162,16 +176,16 @@ export default function AddDimensionsPage() {
       return;
     }
 
-    if (!id || !user) return;
+    if (!id || !user?.email) {
+      setError('Ошибка авторизации');
+      showToast('Ошибка авторизации', 'error');
+      return;
+    }
+    
     setSaving(true);
     setError(null);
 
     try {
-      const docRef = doc(db, 'orders', id as string);
-      const status = 'Ожидает оформления';
-      const timestamp = new Date().toISOString();
-      
-      // Преобразуем все данные в числа перед отправкой в Firebase
       const numericPlaces = places.map(p => ({
         d: parseFloat(String(p.d)),
         w: parseFloat(String(p.w)),
@@ -179,21 +193,21 @@ export default function AddDimensionsPage() {
         weight: parseFloat(String(p.weight)),
       }));
 
-      await updateDoc(docRef, {
-        places_data: numericPlaces,
-        totalVolume: parseFloat(totals.volume),
-        totalWeight: parseFloat(totals.weight),
-        status,
-        history: arrayUnion({
-          status,
-          timestamp,
-          user: user.email
-        })
-      });
+      // 🔥 Используем централизованную функцию с записью в историю
+      await saveDimensionsAndUpdateStatus(
+        id as string,
+        user.email,
+        numericPlaces,
+        parseFloat(totals.volume),
+        parseFloat(totals.weight)
+      );
+      
+      showToast('Габариты сохранены, заказ ожидает оформления', 'success');
       router.push('/');
     } catch (err) {
       console.error('Error saving dimensions:', err);
       setError('Ошибка при сохранении данных');
+      showToast('Ошибка при сохранении данных', 'error');
     } finally {
       setSaving(false);
     }
@@ -201,7 +215,7 @@ export default function AddDimensionsPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
         <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
       </div>
     );
@@ -209,36 +223,36 @@ export default function AddDimensionsPage() {
 
   if (!order) {
     return (
-      <div className="min-h-screen p-4 bg-slate-50">
-        <div className="bg-white p-8 rounded-2xl text-center border border-slate-200">
-          <p className="text-slate-600">Заказ не найден</p>
-          <Link href="/" className="mt-4 text-blue-600 inline-block">Вернуться на главную</Link>
+      <div className="min-h-screen p-4 bg-slate-50 dark:bg-slate-950">
+        <div className="bg-white dark:bg-slate-900 p-8 rounded-2xl text-center border border-slate-200 dark:border-slate-800">
+          <p className="text-slate-600 dark:text-slate-400">Заказ не найден</p>
+          <Link href="/" className="mt-4 text-blue-600 dark:text-blue-400 inline-block">Вернуться на главную</Link>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-32">
-      <header className="bg-white border-b border-slate-200 px-4 py-4 sticky top-0 z-20 flex items-center justify-between">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 pb-32 transition-colors duration-200">
+      <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 py-4 sticky top-0 z-20 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <button onClick={() => router.back()} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-            <ArrowLeft className="w-6 h-6 text-slate-600" />
+          <button onClick={() => router.back()} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
+            <ArrowLeft className="w-6 h-6 text-slate-600 dark:text-slate-400" />
           </button>
           <div>
-            <h1 className="text-lg font-bold text-slate-900">Габариты заказа</h1>
-            <p className="text-xs text-slate-500">{order.orderNumber || 'Без номера'} · {order.quantity} мест</p>
+            <h1 className="text-lg font-bold text-slate-900 dark:text-white">Габариты заказа</h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400">{order.orderNumber || 'Без номера'} · {order.quantity} мест</p>
           </div>
         </div>
         <div className="text-right">
           <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Итого</p>
-          <p className="text-sm font-bold text-slate-900">{totals.volume} м³ · {totals.weight} кг</p>
+          <p className="text-sm font-bold text-slate-900 dark:text-white">{totals.volume} м³ · {totals.weight} кг</p>
         </div>
       </header>
 
       <main className="max-w-2xl mx-auto p-4 space-y-6">
-        <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 space-y-4">
-          <div className="flex items-center gap-2 text-slate-900 font-bold">
+        <section className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 space-y-4">
+          <div className="flex items-center gap-2 text-slate-900 dark:text-white font-bold">
             <Layers className="w-5 h-5 text-blue-600" />
             <h2>Групповой ввод</h2>
           </div>
@@ -249,7 +263,7 @@ export default function AddDimensionsPage() {
               placeholder="Диапазон (напр. 1-3, 5)"
               value={groupInput}
               onChange={(e) => setGroupInput(e.target.value)}
-              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm"
+              className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl outline-none text-sm"
             />
 
             <div className="grid grid-cols-4 gap-2">
@@ -268,14 +282,14 @@ export default function AddDimensionsPage() {
                     if (i === 2) setGroupH(v);
                     if (i === 3) setGroupWeight(v);
                   }}
-                  className="px-2 py-3 bg-slate-50 border border-slate-200 rounded-xl text-center text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                  className="px-2 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-center text-sm outline-none focus:ring-2 focus:ring-blue-500"
                 />
               ))}
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              <button onClick={parseGroupInput} className="py-3 bg-blue-600 text-white rounded-xl font-bold text-sm">Применить к группе</button>
-              <button onClick={applyToAll} className="py-3 bg-white border border-blue-600 text-blue-600 rounded-xl font-bold text-sm flex items-center justify-center gap-2">
+              <button onClick={parseGroupInput} className="py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm transition-colors">Применить к группе</button>
+              <button onClick={applyToAll} className="py-3 bg-white dark:bg-slate-800 border border-blue-600 text-blue-600 rounded-xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition-colors">
                 <Copy className="w-4 h-4" /> Всем как №1
               </button>
             </div>
@@ -283,7 +297,7 @@ export default function AddDimensionsPage() {
         </section>
 
         {error && (
-          <div className="p-4 bg-red-50 border border-red-100 rounded-2xl flex items-center gap-3 text-red-700 text-sm">
+          <div className="p-4 bg-red-50 dark:bg-red-950/30 border border-red-100 dark:border-red-800 rounded-2xl flex items-center gap-3 text-red-700 dark:text-red-300 text-sm">
             <AlertCircle className="w-5 h-5 shrink-0" />
             <p>{error}</p>
           </div>
@@ -291,7 +305,7 @@ export default function AddDimensionsPage() {
 
         <div className="space-y-4">
           {places.map((place, index) => (
-            <div key={index} className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200">
+            <div key={index} className="bg-white dark:bg-slate-900 p-5 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
               <div className="flex items-center justify-between mb-4">
                 <span className="text-xs font-bold text-slate-400 uppercase">Место №{index + 1}</span>
                 <div className="text-[10px] text-slate-400">
@@ -301,10 +315,10 @@ export default function AddDimensionsPage() {
 
               <div className="grid grid-cols-4 gap-3">
                 {[
-                  { label: 'Длина', field: 'd' },
-                  { label: 'Ширина', field: 'w' },
-                  { label: 'Высота', field: 'h' },
-                  { label: 'Вес', field: 'weight' }
+                  { label: 'Длина', field: 'd' as keyof PlaceData },
+                  { label: 'Ширина', field: 'w' as keyof PlaceData },
+                  { label: 'Высота', field: 'h' as keyof PlaceData },
+                  { label: 'Вес', field: 'weight' as keyof PlaceData }
                 ].map((col) => (
                   <div key={col.field} className="space-y-1">
                     <label className="text-[10px] text-slate-400 font-bold uppercase ml-1">{col.label}</label>
@@ -312,9 +326,9 @@ export default function AddDimensionsPage() {
                       type="number"
                       step="0.01"
                       inputMode="decimal"
-                      value={place[col.field as keyof PlaceData]}
-                      onChange={(e) => handleInputChange(index, col.field as keyof PlaceData, e.target.value)}
-                      className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-center font-bold text-slate-900 outline-none focus:ring-2 focus:ring-blue-500"
+                      value={place[col.field]}
+                      onChange={(e) => handleInputChange(index, col.field, e.target.value)}
+                      className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-xl text-center font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
                 ))}
@@ -324,14 +338,21 @@ export default function AddDimensionsPage() {
         </div>
       </main>
 
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-200 z-30">
+      <div className="fixed bottom-0 left-0 right-0 p-4 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 z-30">
         <div className="max-w-2xl mx-auto">
           <button 
             onClick={handleSave}
             disabled={saving}
-            className="w-full h-16 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-lg flex items-center justify-center gap-3 disabled:opacity-50"
+            className="w-full h-16 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-lg flex items-center justify-center gap-3 disabled:opacity-50 transition-colors shadow-lg shadow-blue-200 dark:shadow-blue-950/30"
           >
-            {saving ? <Loader2 className="w-6 h-6 animate-spin" /> : <><Save className="w-6 h-6" /> Сохранить и оформить</>}
+            {saving ? (
+              <Loader2 className="w-6 h-6 animate-spin" />
+            ) : (
+              <>
+                <Save className="w-6 h-6" /> 
+                Сохранить и оформить
+              </>
+            )}
           </button>
         </div>
       </div>

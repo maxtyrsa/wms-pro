@@ -6,7 +6,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
 import { motion } from 'motion/react';
-import { ArrowLeft, Loader2, Package, Truck, Clock, Info, Hash, Weight, Box } from 'lucide-react';
+import { ArrowLeft, Loader2, Package, Truck, Clock, Info, Hash, Weight, Box, Layers } from 'lucide-react';
 import Link from 'next/link';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -27,6 +27,14 @@ interface OrderData {
   payment_sum?: number;
   delivery_cost?: number;
   profit?: number;
+  consolidationId?: string;
+  consolidationNumber?: string;
+  history?: Array<{ 
+    status: string; 
+    timestamp: string; 
+    user: string;
+    action?: string;
+  }>;
 }
 
 export default function OrderDetailsPage() {
@@ -42,7 +50,6 @@ export default function OrderDetailsPage() {
   
   const isAdmin = role === 'admin';
 
-  // Функция для расчета общего объема
   const calculateTotalVolume = (order: OrderData): number => {
     if (order.totalVolume) return order.totalVolume;
     if (order.places_data && order.places_data.length > 0) {
@@ -54,7 +61,6 @@ export default function OrderDetailsPage() {
     return 0;
   };
 
-  // Функция для расчета общего веса
   const calculateTotalWeight = (order: OrderData): number => {
     if (order.totalWeight) return order.totalWeight;
     if (order.places_data && order.places_data.length > 0) {
@@ -92,7 +98,6 @@ export default function OrderDetailsPage() {
     fetchOrder();
   }, [id]);
 
-  // Расчет времени сборки
   useEffect(() => {
     if (!order?.time_start || order?.time_end) {
       setElapsedTime(null);
@@ -113,7 +118,6 @@ export default function OrderDetailsPage() {
     return () => clearInterval(interval);
   }, [order?.time_start, order?.time_end]);
 
-  // Финальное время сборки
   const getFinalAssemblyTime = () => {
     if (!order?.time_start || !order?.time_end) return null;
     const start = order.time_start.toDate ? order.time_start.toDate() : new Date(order.time_start);
@@ -132,8 +136,10 @@ export default function OrderDetailsPage() {
       case 'В работе': return 'bg-blue-100 text-blue-800';
       case 'Ожидает оформления': return 'bg-amber-100 text-amber-800';
       case 'Готов к выдаче': return 'bg-emerald-100 text-emerald-800';
-      case 'Оформлен': return 'bg-emerald-100 text-emerald-800';
-      case 'Завершен': return 'bg-slate-200 text-slate-800';
+      case 'Оформлен': return 'bg-cyan-100 text-cyan-800';
+      case 'Отправлен': return 'bg-emerald-100 text-emerald-800';
+      case 'Выдан': return 'bg-emerald-100 text-emerald-800';
+      case 'В консолидации': return 'bg-purple-100 text-purple-800';
       default: return 'bg-slate-100 text-slate-800';
     }
   };
@@ -141,7 +147,6 @@ export default function OrderDetailsPage() {
   const getNextAction = () => {
     if (!order) return null;
     
-    // Для сотрудников - только навигация
     if (!isAdmin) {
       if (order.status === 'Новый') {
         const href = order.carrier === 'Самовывоз' ? `/employee/assembly/${id}` : `/employee/add_money/${id}`;
@@ -196,7 +201,6 @@ export default function OrderDetailsPage() {
       return null;
     }
 
-    // Администраторская панель
     if (order.status === 'Новый') {
       const href = order.carrier === 'Самовывоз' ? `/employee/assembly/${id}` : `/employee/add_money/${id}`;
       return (
@@ -275,6 +279,17 @@ export default function OrderDetailsPage() {
               </span>
             </div>
 
+            {/* 🔥 Блок информации о консолидации */}
+            {order.consolidationNumber && (
+              <div className="flex items-center justify-between p-4 bg-purple-50 dark:bg-purple-950/30 rounded-2xl">
+                <div className="flex items-center gap-3 text-purple-700 dark:text-purple-300">
+                  <Layers className="w-5 h-5 text-purple-500" />
+                  <span className="font-medium">Находится в консоли</span>
+                </div>
+                <span className="font-bold text-purple-900 dark:text-purple-300">{order.consolidationNumber}</span>
+              </div>
+            )}
+
             <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800 rounded-2xl">
               <div className="flex items-center gap-3 text-slate-700 dark:text-slate-300">
                 <Package className="w-5 h-5 text-emerald-500" />
@@ -349,7 +364,7 @@ export default function OrderDetailsPage() {
             </div>
           )}
 
-          {/* Финансовая информация (только для оформленных заказов) */}
+          {/* Финансовая информация */}
           {(order.payment_sum !== undefined && order.payment_sum !== null) || 
            (order.delivery_cost !== undefined && order.delivery_cost !== null) ? (
             <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-2">
@@ -374,6 +389,45 @@ export default function OrderDetailsPage() {
               )}
             </div>
           ) : null}
+
+          {/* 🔥 История изменений - ТАБЛИЦА */}
+          {order.history && order.history.length > 0 && (
+            <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
+              <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2 mb-3">
+                <Clock className="w-4 h-4 text-slate-400" />
+                История изменений статусов
+              </h3>
+              
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-700 text-left">
+                      <th className="py-2 px-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Статус</th>
+                      <th className="py-2 px-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Дата и время</th>
+                      <th className="py-2 px-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Пользователь</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {[...order.history].reverse().map((item, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                        <td className="py-2 px-2">
+                          <span className={`px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap ${getStatusColor(item.status)}`}>
+                            {item.status}
+                          </span>
+                        </td>
+                        <td className="py-2 px-2 text-slate-600 dark:text-slate-400 font-mono text-xs whitespace-nowrap">
+                          {item.timestamp ? format(new Date(item.timestamp), 'dd.MM.yyyy HH:mm:ss') : '—'}
+                        </td>
+                        <td className="py-2 px-2 text-slate-700 dark:text-slate-300 text-xs">
+                          {item.user?.split('@')[0] || item.user || 'Система'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* Action Buttons */}
           <div className="pt-4">

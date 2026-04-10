@@ -3,12 +3,14 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, updateDoc, doc } from 'firebase/firestore';
+import { collection, query, getDocs } from 'firebase/firestore';
 import { format, differenceInDays } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { Package, Search, XCircle, Loader2, AlertTriangle, Clock, User, CalendarDays, Handshake } from 'lucide-react';
 import { showToast } from '@/components/Toast';
 import { useAuth } from '@/context/AuthContext';
+// 🔥 Импортируем функцию для выдачи заказа
+import { markOrderAsIssued } from '@/lib/orders';
 
 interface PickupOrder {
   id: string;
@@ -54,17 +56,17 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
     }
   };
 
+  // 🔥 ИСПРАВЛЕНО: Используем функцию из lib/orders для выдачи заказа
   const handleMarkAsIssued = async (orderId: string) => {
     if (!confirm('Подтвердите выдачу заказа клиенту?')) return;
+    if (!user?.email) {
+      showToast('Ошибка: пользователь не авторизован', 'error');
+      return;
+    }
     
     setUpdatingOrderId(orderId);
     try {
-      const orderRef = doc(db, 'orders', orderId);
-      await updateDoc(orderRef, {
-        status: 'Выдан',
-        issuedAt: new Date().toISOString(),
-        issuedBy: isAdmin ? 'admin' : user?.email || 'employee'
-      });
+      await markOrderAsIssued(orderId, user.email);
       showToast('Заказ выдан клиенту', 'success');
       fetchPickupOrders();
     } catch (error) {
@@ -201,7 +203,6 @@ export function PickupOrdersList({ isAdmin = false }: PickupOrdersListProps) {
                     </div>
                   </div>
                   
-                  {/* Кнопка выдачи - доступна и администратору, и сотруднику */}
                   <button
                     onClick={() => handleMarkAsIssued(order.id)}
                     disabled={updatingOrderId === order.id}

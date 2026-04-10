@@ -66,6 +66,7 @@ interface Order {
   delivery_cost?: number;
   profit?: number;
   carrier: string;
+  orderNumber?: string;
 }
 
 interface Jamb {
@@ -124,7 +125,6 @@ const getDayName = (dayIndex: number): string => {
   return names[dayIndex];
 };
 
-// Функция для безопасного форматирования даты
 const safeFormatDate = (date: any, formatStr: string): string => {
   if (!date) return '—';
   const d = new Date(date);
@@ -144,6 +144,11 @@ export default function AdminDashboard() {
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
   const [error, setError] = useState<string | null>(null);
   
+  // --- НОВОЕ: Состояние для просроченных заказов ---
+  const [staleOrders, setStaleOrders] = useState<Order[]>([]);
+  const [hasShownStaleToast, setHasShownStaleToast] = useState(false);
+  // ---------------------------------------------
+  
   const currentMonth = getCurrentMonthRange();
   const [dateFilter, setDateFilter] = useState<{ start: string; end: string }>({
     start: currentMonth.start,
@@ -162,7 +167,6 @@ export default function AdminDashboard() {
       setLoading(true);
       setError(null);
       
-      // Проверяем валидность дат
       const startDate = new Date(dateFilter.start);
       const endDate = new Date(dateFilter.end);
       
@@ -204,12 +208,60 @@ export default function AdminDashboard() {
     }
   }, [dateFilter]);
 
+  // --- НОВОЕ: Функция проверки просроченных заказов ---
+  /**
+   * Проверяет наличие заказов со статусом 'Ожидает оформления', 
+   * которые были созданы более 4 дней (96 часов) назад.
+   */
+  const checkForStaleOrders = useCallback(async () => {
+    // Только для админа
+    if (role !== 'admin') return;
+
+    try {
+      const fourDaysAgo = new Date();
+      fourDaysAgo.setHours(fourDaysAgo.getHours() - 96); // 4 дня = 96 часов
+      const fourDaysAgoISO = fourDaysAgo.toISOString();
+
+      const staleQuery = query(
+        collection(db, 'orders'),
+        where('status', '==', 'Ожидает оформления'),
+        where('createdAt', '<=', fourDaysAgoISO)
+      );
+      
+      const snapshot = await getDocs(staleQuery);
+      const staleOrdersList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
+      
+      setStaleOrders(staleOrdersList);
+
+      if (staleOrdersList.length > 0 && !hasShownStaleToast) {
+        showToast(`⚠️ Внимание! ${staleOrdersList.length} заказ(ов) ожидают оформления более 4 дней.`, 'warning');
+        setHasShownStaleToast(true);
+      }
+      
+      if (staleOrdersList.length === 0) {
+        setHasShownStaleToast(false);
+      }
+    } catch (err) {
+      console.error('Error checking stale orders:', err);
+    }
+  }, [role, hasShownStaleToast]);
+  // ---------------------------------------------
+
   // Загружаем данные при изменении фильтра
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  // Валидация дат при изменении
+  // --- НОВОЕ: Эффект для проверки просроченных заказов ---
+  useEffect(() => {
+    if (role === 'admin') {
+      checkForStaleOrders(); // Проверить сразу при загрузке
+      const intervalId = setInterval(checkForStaleOrders, 3600000); // Каждый час
+      return () => clearInterval(intervalId);
+    }
+  }, [role, checkForStaleOrders]);
+  // -----------------------------------------------------
+
   const handleDateChange = (type: 'start' | 'end', value: string) => {
     const newDate = new Date(value);
     if (isValid(newDate)) {
@@ -564,6 +616,56 @@ export default function AdminDashboard() {
           </div>
         </header>
 
+        {/* --- НОВЫЙ UI БЛОК: Просроченные заказы --- */}
+        {role === 'admin' && staleOrders.length > 0 && (
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-2xl p-5"
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 bg-amber-100 dark:bg-amber-900/50 rounded-lg">
+                <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+              </div>
+              <h2 className="text-lg font-bold text-amber-800 dark:text-amber-300">
+                Требуют внимания: Заказы, ожидающие оформления
+              </h2>
+              <span className="ml-auto text-sm font-medium text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/50 px-3 py-1 rounded-full">
+                {staleOrders.length} заказ(ов) старше 4 дней
+              </span>
+            </div>
+            
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
+              {staleOrders.map(order => (
+                <div 
+                  key={order.id}
+                  className="flex items-center justify-between p-3 bg-white dark:bg-slate-900 rounded-xl border border-amber-100 dark:border-amber-800/50 shadow-sm"
+                >
+                  <div className="flex items-center gap-3">
+                    <Package className="w-4 h-4 text-amber-500" />
+                    <div>
+                      <p className="font-medium text-slate-900 dark:text-white">
+                        Заказ №{order.orderNumber || 'Без номера'}
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        Создан: {order.createdAt ? format(new Date(order.createdAt), 'dd.MM.yyyy HH:mm') : '—'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => router.push(`/admin/orders/${order.id}`)}
+                    className="text-xs font-medium text-amber-700 dark:text-amber-400 hover:underline"
+                  >
+                    Открыть карточку →
+                  </button>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+        {/* ----------------------------------------- */}
+
         {orders.length === 0 && jambs.length === 0 ? (
           <div className="bg-white dark:bg-slate-900 rounded-3xl p-12 text-center border border-slate-200">
             <Package className="w-16 h-16 text-slate-300 mx-auto mb-4" />
@@ -648,7 +750,6 @@ export default function AdminDashboard() {
                 </div>
               ) : (
                 <>
-                  {/* Горизонтальные бары для KPI */}
                   <div className="space-y-4 mb-6">
                     {employeeKPI.map((employee, idx) => (
                       <div key={idx} className="space-y-1">
@@ -680,7 +781,6 @@ export default function AdminDashboard() {
                     ))}
                   </div>
                   
-                  {/* Статистика */}
                   <div className="grid grid-cols-3 gap-4 pt-4 border-t border-slate-200 dark:border-slate-700">
                     <div className="text-center">
                       <div className="text-xs text-slate-500">Лидер</div>
