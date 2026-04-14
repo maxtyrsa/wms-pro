@@ -7,11 +7,13 @@ import {
   collection, 
   query, 
   orderBy, 
+  writeBatch, 
   doc, 
   updateDoc, 
   deleteDoc, 
   serverTimestamp,
   getDocs,
+  getDoc,
   where,
   QueryConstraint,
   startAfter,
@@ -19,25 +21,34 @@ import {
   DocumentSnapshot
 } from 'firebase/firestore';
 import { format, startOfDay, endOfDay, startOfMonth, endOfMonth } from 'date-fns';
+import { ru } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
 import { useRouter } from 'next/navigation';
 import { 
   CheckSquare, Square, X, ChevronDown, Package, 
   Clock, Hash, CheckCircle2, ArrowLeft, Trash2,
   ChevronRight, Loader2, Search, XCircle, User, Truck, Weight, Box, Calendar, DollarSign,
-  Edit2, Save, Plus, Minus, Copy, Filter, Layers
+  Edit2, Save, Plus, Minus, Copy, Filter, Layers, ExternalLink, Store
 } from 'lucide-react';
 import { showToast } from '@/components/Toast';
 import { ReturnManagement } from '@/components/returns/ReturnManagement';
 import { useInView } from 'react-intersection-observer';
-// 🔥 Импортируем функции для работы с заказами
-import { updateOrderStatus, bulkUpdateOrderStatus } from '@/lib/orders';
+import Link from 'next/link';
 
 const CARRIERS = ['Все', 'CDEK', 'DPD', 'Деловые линии', 'Почта России', 'ПЭК', 'Самовывоз', 'Образцы', 'OZON_FBS', 'Ярмарка Мастеров', 'Yandex Market', 'WB_FBS', 'AliExpress', 'Бийск', 'OZON_FBO', 'WB_FBO'];
-const STATUSES = ['Все', 'Новый', 'Комплектация', 'Ожидает оформления', 'Готов к выдаче', 'Оформлен', 'Отправлен', 'Завершен', 'Выдан', 'Запрошен возврат', 'Возврат одобрен', 'Возврат получен', 'На повторной обработке', 'Повторная отправка', 'В консолидации'];
+
+// Статусы для ТК (транспортных компаний)
+const TK_STATUSES = ['Новый', 'Комплектация', 'Ожидает оформления', 'Оформлен', 'Отправлен', 'В консолидации'];
+
+// Статусы для самовывоза
+const PICKUP_STATUSES = ['Новый', 'Готов к выдаче', 'Выдан'];
+
+// Все статусы для фильтрации
+const ALL_STATUSES = ['Все', ...new Set([...TK_STATUSES, ...PICKUP_STATUSES, 'Запрошен возврат', 'Возврат одобрен', 'Возврат получен', 'На повторной обработке', 'Повторная отправка', 'Завершен'])];
 
 const PAGE_SIZE = 20;
 
+// Интерфейс для места
 interface Place {
   d: number;
   w: number;
@@ -61,10 +72,24 @@ interface Order {
   time_start?: any;
   time_end?: any;
   places_data?: Place[];
-  history?: any[];
+  history?: Array<{
+    status: string;
+    previousStatus?: string;
+    timestamp: string;
+    user: string;
+    action?: string;
+    consolidationId?: string;
+    consolidationNumber?: string;
+    comment?: string;
+  }>;
   consolidationId?: string;
   consolidationNumber?: string;
-  previousStatus?: string;
+  registeredAt?: any;
+  shippedAt?: any;
+  issuedAt?: any;
+  completedAt?: any;
+  lastEdited?: any;
+  lastEditedBy?: string;
 }
 
 interface Filters {
@@ -75,6 +100,7 @@ interface Filters {
   searchQuery: string;
 }
 
+// Хук для пагинированной загрузки заказов
 function usePaginatedOrders(filters: Filters) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [lastDoc, setLastDoc] = useState<DocumentSnapshot | null>(null);
@@ -241,12 +267,26 @@ export default function AdminOrdersPage() {
   const [groupW, setGroupW] = useState('');
   const [groupH, setGroupH] = useState('');
   const [groupWeight, setGroupWeight] = useState('');
-
+  
   useEffect(() => {
     if (inView && hasMore && !loadingMore) {
       loadMore();
     }
   }, [inView, hasMore, loadingMore, loadMore]);
+
+  // Функция для получения доступных статусов в зависимости от типа заказа
+  const getAvailableStatuses = (carrier: string): string[] => {
+    if (carrier === 'Самовывоз') {
+      return PICKUP_STATUSES;
+    }
+    return TK_STATUSES;
+  };
+
+  // Функция для проверки допустимости статуса
+  const isValidStatusForCarrier = (status: string, carrier: string): boolean => {
+    const availableStatuses = getAvailableStatuses(carrier);
+    return availableStatuses.includes(status);
+  };
 
   if (loading && orders.length === 0) {
     return (
@@ -288,55 +328,149 @@ export default function AdminOrdersPage() {
     }
   };
 
-  // 🔥 ИСПРАВЛЕНО: Массовое изменение статуса через утилиту
   const handleMassStatusChange = async (newStatus: string) => {
     if (selectedOrders.size === 0) return;
-    if (!user?.email) {
-      showToast('Ошибка: пользователь не авторизован', 'error');
-      return;
+    
+    const selectedOrdersList = orders.filter(o => selectedOrders.has(o.id));
+    
+    for (const order of selectedOrdersList) {
+      if (!isValidStatusForCarrier(newStatus, order.carrier)) {
+        showToast(`Статус "${newStatus}" недоступен для заказа ${order.orderNumber} (${order.carrier})`, 'warning');
+        return;
+      }
     }
     
     setBulkUpdating(true);
     try {
-      const result = await bulkUpdateOrderStatus(Array.from(selectedOrders), newStatus, user.email);
+      const batch = writeBatch(db);
+      
+      for (const order of selectedOrdersList) {
+        const orderRef = doc(db, 'orders', order.id);
+        const orderSnap = await getDoc(orderRef);
+        
+        if (!orderSnap.exists()) continue;
+        
+        const currentData = orderSnap.data();
+        
+        const historyEntry = {
+          status: newStatus,
+          previousStatus: order.status,
+          timestamp: new Date().toISOString(),
+          user: user?.email || 'system',
+        };
+        
+        const currentHistory = currentData.history || [];
+        const updatedHistory = [...currentHistory, historyEntry];
+        
+        const updateData: any = {
+          status: newStatus,
+          history: updatedHistory,
+          lastUpdated: serverTimestamp(),
+        };
+        
+        if (newStatus === 'Оформлен') updateData.registeredAt = serverTimestamp();
+        if (newStatus === 'Отправлен') updateData.shippedAt = serverTimestamp();
+        if (newStatus === 'Выдан') {
+          updateData.issuedAt = serverTimestamp();
+          updateData.completedAt = serverTimestamp();
+        }
+        
+        batch.update(orderRef, updateData);
+      }
+      
+      await batch.commit();
       
       setMassStatusMenuOpen(false);
       setSelectedOrders(new Set());
-      
-      if (result.skipped > 0) {
-        showToast(`Статус ${result.success} заказов изменен на "${newStatus}" (${result.skipped} уже имели этот статус)`, 'success');
-      } else {
-        showToast(`Статус ${result.success} заказов изменен на "${newStatus}"`, 'success');
-      }
+      showToast(`Статус ${selectedOrders.size} заказов изменен на "${newStatus}"`, 'success');
       refresh();
     } catch (error) {
       console.error('Error bulk updating status:', error);
-      showToast('Ошибка при массовом изменении статусов', 'error');
+      showToast('Ошибка при массовом изменении статусов: ' + (error as Error).message, 'error');
     } finally {
       setBulkUpdating(false);
     }
   };
 
-  // 🔥 ИСПРАВЛЕНО: Изменение статуса одного заказа через утилиту
   const handleSingleStatusChange = async (id: string, newStatus: string) => {
-    if (!user?.email) {
-      showToast('Ошибка: пользователь не авторизован', 'error');
+    console.log('handleSingleStatusChange called:', { id, newStatus });
+    
+    const order = orders.find(o => o.id === id) || selectedOrderDetails;
+    if (!order) {
+      console.error('Order not found for id:', id);
+      showToast('Заказ не найден', 'error');
+      return;
+    }
+    
+    console.log('Current order:', { status: order.status, carrier: order.carrier, orderNumber: order.orderNumber });
+    
+    if (!isValidStatusForCarrier(newStatus, order.carrier)) {
+      console.warn('Invalid status for carrier:', newStatus, order.carrier);
+      showToast(`Статус "${newStatus}" недоступен для ${order.carrier}`, 'warning');
       return;
     }
     
     setUpdatingStatusId(id);
+    
     try {
-      await updateOrderStatus(id, newStatus, user.email);
+      const orderRef = doc(db, 'orders', id);
+      const orderSnap = await getDoc(orderRef);
       
-      if (selectedOrderDetails?.id === id) {
-        setSelectedOrderDetails({ ...selectedOrderDetails, status: newStatus });
+      if (!orderSnap.exists()) {
+        throw new Error('Документ заказа не найден');
       }
       
-      showToast(`Статус заказа изменен на "${newStatus}"`, 'success');
+      const currentData = orderSnap.data();
+      
+      const historyEntry = {
+        status: newStatus,
+        previousStatus: order.status,
+        timestamp: new Date().toISOString(),
+        user: user?.email || 'system',
+      };
+      
+      const currentHistory = currentData.history || [];
+      const updatedHistory = [...currentHistory, historyEntry];
+      
+      const updateData: any = { 
+        status: newStatus,
+        history: updatedHistory,
+        lastUpdated: serverTimestamp(),
+      };
+      
+      if (newStatus === 'Оформлен') {
+        updateData.registeredAt = serverTimestamp();
+      }
+      
+      if (newStatus === 'Отправлен') {
+        updateData.shippedAt = serverTimestamp();
+      }
+      
+      if (newStatus === 'Выдан') {
+        updateData.issuedAt = serverTimestamp();
+        updateData.completedAt = serverTimestamp();
+      }
+      
+      console.log('Updating order with data:', updateData);
+      await updateDoc(orderRef, updateData);
+      
+      if (selectedOrderDetails?.id === id) {
+        setSelectedOrderDetails({ 
+          ...selectedOrderDetails, 
+          status: newStatus, 
+          history: updatedHistory,
+          ...(newStatus === 'Оформлен' && { registeredAt: new Date() }),
+          ...(newStatus === 'Отправлен' && { shippedAt: new Date() }),
+          ...(newStatus === 'Выдан' && { issuedAt: new Date(), completedAt: new Date() })
+        });
+      }
+      
+      showToast(`Статус изменен: ${order.status} → ${newStatus}`, 'success');
       refresh();
+      
     } catch (error) {
       console.error('Error updating status:', error);
-      showToast('Ошибка при изменении статуса', 'error');
+      showToast('Ошибка при изменении статуса: ' + (error as Error).message, 'error');
     } finally {
       setUpdatingStatusId(null);
     }
@@ -370,7 +504,7 @@ export default function AdminOrdersPage() {
       payment_sum: selectedOrderDetails.payment_sum || 0,
       delivery_cost: selectedOrderDetails.delivery_cost || 0,
       totalWeight: selectedOrderDetails.totalWeight || 0,
-      totalVolume: selectedOrderDetails.totalVolume || 0
+      totalVolume: selectedOrderDetails.totalVolume || 0,
     });
     setEditingPlaces(selectedOrderDetails.places_data || []);
     setIsEditing(true);
@@ -384,11 +518,25 @@ export default function AdminOrdersPage() {
 
   const handleSaveEdit = async () => {
     if (!selectedOrderDetails) return;
-    
+
     setSavingEdit(true);
     try {
       const orderRef = doc(db, 'orders', selectedOrderDetails.id);
+      const statusChanged = editFormData.status !== selectedOrderDetails.status;
+
+      if (!isValidStatusForCarrier(editFormData.status, editFormData.carrier)) {
+        showToast(`Статус "${editFormData.status}" недоступен для ${editFormData.carrier}`, 'warning');
+        setSavingEdit(false);
+        return;
+      }
+
+      const orderSnap = await getDoc(orderRef);
+      if (!orderSnap.exists()) {
+        throw new Error('Документ заказа не найден');
+      }
       
+      const currentData = orderSnap.data();
+
       const updateData: any = {
         orderNumber: editFormData.orderNumber || null,
         carrier: editFormData.carrier,
@@ -399,9 +547,28 @@ export default function AdminOrdersPage() {
         delivery_cost: Number(editFormData.delivery_cost) || 0,
         profit: (Number(editFormData.payment_sum) || 0) - (Number(editFormData.delivery_cost) || 0),
         lastEdited: serverTimestamp(),
-        lastEditedBy: user?.email
+        lastEditedBy: user?.email || 'system',
       };
-      
+
+      if (statusChanged) {
+        const historyEntry = {
+          status: editFormData.status,
+          previousStatus: selectedOrderDetails.status,
+          timestamp: new Date().toISOString(),
+          user: user?.email || 'system',
+        };
+        
+        const currentHistory = currentData.history || [];
+        updateData.history = [...currentHistory, historyEntry];
+        
+        if (editFormData.status === 'Оформлен') updateData.registeredAt = serverTimestamp();
+        if (editFormData.status === 'Отправлен') updateData.shippedAt = serverTimestamp();
+        if (editFormData.status === 'Выдан') {
+          updateData.issuedAt = serverTimestamp();
+          updateData.completedAt = serverTimestamp();
+        }
+      }
+
       if (editingPlaces.length > 0) {
         updateData.places_data = editingPlaces;
         let totalWeight = 0;
@@ -414,21 +581,37 @@ export default function AdminOrdersPage() {
         updateData.totalWeight = totalWeight;
         updateData.totalVolume = totalVolume;
       }
-      
+
       await updateDoc(orderRef, updateData);
-      
-      setSelectedOrderDetails({
+
+      const updatedOrderDetails: Order = {
         ...selectedOrderDetails,
-        ...updateData,
-        places_data: editingPlaces
-      });
-      
+        ...editFormData,
+        places_data: editingPlaces,
+        profit: (Number(editFormData.payment_sum) || 0) - (Number(editFormData.delivery_cost) || 0),
+      };
+
+      if (updateData.totalWeight) updatedOrderDetails.totalWeight = updateData.totalWeight;
+      if (updateData.totalVolume) updatedOrderDetails.totalVolume = updateData.totalVolume;
+
+      if (statusChanged) {
+        updatedOrderDetails.history = updateData.history;
+        if (editFormData.status === 'Оформлен') updatedOrderDetails.registeredAt = new Date();
+        if (editFormData.status === 'Отправлен') updatedOrderDetails.shippedAt = new Date();
+        if (editFormData.status === 'Выдан') {
+          updatedOrderDetails.issuedAt = new Date();
+          updatedOrderDetails.completedAt = new Date();
+        }
+      }
+
+      setSelectedOrderDetails(updatedOrderDetails);
+
       showToast('Заказ успешно обновлен', 'success');
       closeEditMode();
       refresh();
     } catch (error) {
       console.error('Error saving edit:', error);
-      showToast('Ошибка при сохранении изменений', 'error');
+      showToast('Ошибка при сохранении изменений: ' + (error as Error).message, 'error');
     } finally {
       setSavingEdit(false);
     }
@@ -535,14 +718,13 @@ export default function AdminOrdersPage() {
     switch (status) {
       case 'Новый': return 'bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/30 dark:text-purple-300';
       case 'Комплектация': return 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300';
-      case 'В работе': return 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300';
       case 'Ожидает оформления': return 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300';
       case 'Готов к выдаче': return 'bg-indigo-100 text-indigo-800 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300';
       case 'Оформлен': return 'bg-cyan-100 text-cyan-800 border-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-300';
       case 'Отправлен': return 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300';
-      case 'Выдан': return 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300';
+      case 'Выдан': return 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-300';
+      case 'В консолидации': return 'bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300';
       case 'Завершен': return 'bg-slate-200 text-slate-800 border-slate-300 dark:bg-slate-800 dark:text-slate-300';
-      case 'В консолидации': return 'bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/30 dark:text-purple-300';
       case 'Запрошен возврат': return 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300';
       case 'Возврат одобрен': return 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300';
       case 'Возврат получен': return 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300';
@@ -569,6 +751,46 @@ export default function AdminOrdersPage() {
       return order.places_data.reduce((acc, p) => acc + (Number(p.weight) || 0), 0);
     }
     return 0;
+  };
+
+  const formatHistoryTimestamp = (timestamp: any) => {
+    if (!timestamp) return '—';
+    
+    try {
+      let date: Date;
+      
+      if (typeof timestamp === 'string') {
+        date = new Date(timestamp);
+      } else if (timestamp instanceof Date) {
+        date = timestamp;
+      } else if (timestamp.seconds) {
+        date = new Date(timestamp.seconds * 1000);
+      } else {
+        return '—';
+      }
+      
+      if (isNaN(date.getTime())) return '—';
+      
+      const now = new Date();
+      const diffInHours = (now.getTime() - date.getTime()) / (1000 * 60 * 60);
+      
+      if (diffInHours < 24 && date.getDate() === now.getDate()) {
+        return `Сегодня, ${format(date, 'HH:mm')}`;
+      }
+      
+      if (diffInHours < 48 && date.getDate() === now.getDate() - 1) {
+        return `Вчера, ${format(date, 'HH:mm')}`;
+      }
+      
+      if (date.getFullYear() === now.getFullYear()) {
+        return format(date, 'd MMMM, HH:mm', { locale: ru });
+      }
+      
+      return format(date, 'd MMMM yyyy, HH:mm', { locale: ru });
+    } catch (error) {
+      console.error('Error formatting timestamp:', error);
+      return '—';
+    }
   };
 
   return (
@@ -651,7 +873,7 @@ export default function AdminOrdersPage() {
                 onChange={(e) => handleFilterChange('status', e.target.value)}
                 className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer"
               >
-                {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                {ALL_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
           </div>
@@ -702,45 +924,55 @@ export default function AdminOrdersPage() {
             </span>
           </div>
 
-          <div className="relative w-full md:w-auto">
-            <button 
-              onClick={() => setMassStatusMenuOpen(!massStatusMenuOpen)} 
-              disabled={selectedOrders.size === 0 || bulkUpdating}
-              className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-slate-900 dark:bg-slate-800 text-white rounded-2xl text-sm font-bold hover:bg-black disabled:opacity-30 transition-all shadow-lg shadow-slate-200 dark:shadow-slate-800"
-            >
-              {bulkUpdating ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Обновление...
-                </>
-              ) : (
-                <>
-                  Массовое изменение ({selectedOrders.size})
-                  <ChevronDown className="w-4 h-4" />
-                </>
-              )}
-            </button>
-            
-            <AnimatePresence>
-              {massStatusMenuOpen && !bulkUpdating && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 10 }} 
-                  animate={{ opacity: 1, y: 0 }} 
-                  exit={{ opacity: 0, y: 10 }}
-                  className="absolute right-0 mt-3 w-56 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-100 dark:border-slate-700 overflow-hidden z-40 p-1"
-                >
-                  {STATUSES.filter(s => s !== 'Все' && s !== 'В консолидации').map(status => (
-                    <button 
-                      key={status} 
-                      onClick={() => handleMassStatusChange(status)}
-                      className="w-full text-left px-4 py-3 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-blue-950/30 hover:text-blue-700 dark:hover:text-blue-400 rounded-xl transition-all"
-                    >
-                      {status}
-                    </button>
-                  ))}
-                </motion.div>
-              )}
-            </AnimatePresence>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <button 
+                onClick={() => setMassStatusMenuOpen(!massStatusMenuOpen)} 
+                disabled={selectedOrders.size === 0 || bulkUpdating}
+                className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-900 dark:bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-black disabled:opacity-30 transition-all"
+              >
+                {bulkUpdating ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <>
+                    Массовое изменение ({selectedOrders.size})
+                    <ChevronDown className="w-3 h-3" />
+                  </>
+                )}
+              </button>
+              
+              <AnimatePresence>
+                {massStatusMenuOpen && !bulkUpdating && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }} 
+                    animate={{ opacity: 1, y: 0 }} 
+                    exit={{ opacity: 0, y: 10 }}
+                    className="absolute right-0 mt-3 w-56 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-100 dark:border-slate-700 overflow-hidden z-40 p-1 max-h-80 overflow-y-auto"
+                  >
+                    <div className="px-3 py-2 text-[10px] font-bold text-slate-400 uppercase">Для ТК</div>
+                    {TK_STATUSES.map(status => (
+                      <button 
+                        key={status} 
+                        onClick={() => handleMassStatusChange(status)}
+                        className="w-full text-left px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-blue-950/30 hover:text-blue-700 dark:hover:text-blue-400 rounded-xl transition-all"
+                      >
+                        {status}
+                      </button>
+                    ))}
+                    <div className="px-3 py-2 text-[10px] font-bold text-slate-400 uppercase mt-2">Для Самовывоза</div>
+                    {PICKUP_STATUSES.map(status => (
+                      <button 
+                        key={status} 
+                        onClick={() => handleMassStatusChange(status)}
+                        className="w-full text-left px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-green-50 dark:hover:bg-green-950/30 hover:text-green-700 dark:hover:text-green-400 rounded-xl transition-all"
+                      >
+                        {status}
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </div>
 
@@ -786,7 +1018,14 @@ export default function AdminOrdersPage() {
                       <td className="p-5 text-slate-500 dark:text-slate-400 text-xs font-medium whitespace-nowrap">
                         {order.createdAt ? format(new Date(order.createdAt.seconds ? order.createdAt.seconds * 1000 : order.createdAt), 'dd.MM.yy HH:mm') : '-'}
                       </td>
-                      <td className="p-5 font-bold text-slate-900 dark:text-white">{order.orderNumber || '—'}</td>
+                      <td className="p-5 font-bold text-slate-900 dark:text-white">
+                        <div className="flex items-center gap-2">
+                          {order.orderNumber || '—'}
+                          {order.carrier === 'Самовывоз' && (
+                            <Store className="w-3 h-3 text-green-500" title="Самовывоз" />
+                          )}
+                        </div>
+                      </td>
                       <td className="p-5 text-slate-600 dark:text-slate-400 font-semibold text-xs uppercase">{order.carrier}</td>
                       <td className="p-5">
                         <span className={`px-3 py-1.5 rounded-xl text-[10px] font-bold border uppercase tracking-tight ${getStatusColor(order.status)}`}>
@@ -794,7 +1033,7 @@ export default function AdminOrdersPage() {
                         </span>
                       </td>
                       <td className="p-5 text-slate-600 dark:text-slate-400 text-xs font-medium truncate max-w-[120px]">
-                        {order.createdBy?.split('@')[0] || order.createdBy || 'Система'}
+                        {order.createdBy || 'Система'}
                       </td>
                       <td className="p-5 text-center font-mono text-xs text-slate-500 dark:text-slate-400">
                         {formatAssemblyTime(order.time_start, order.time_end)}
@@ -859,9 +1098,20 @@ export default function AdminOrdersPage() {
             >
               <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
                 <div>
-                  <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
-                    {isEditing ? 'Редактирование заказа' : `Заказ ${selectedOrderDetails.orderNumber}`}
-                  </h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
+                      {isEditing ? 'Редактирование заказа' : `Заказ ${selectedOrderDetails.orderNumber}`}
+                    </h2>
+                    {selectedOrderDetails.carrier === 'Самовывоз' ? (
+                      <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-lg text-xs font-bold">
+                        Самовывоз
+                      </span>
+                    ) : (
+                      <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-lg text-xs font-bold">
+                        ТК
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400">{selectedOrderDetails.carrier}</p>
                 </div>
                 <div className="flex gap-2">
@@ -886,7 +1136,18 @@ export default function AdminOrdersPage() {
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-slate-500 mb-1">Транспортная компания</label>
-                        <select value={editFormData?.carrier || ''} onChange={(e) => setEditFormData({ ...editFormData, carrier: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800">
+                        <select 
+                          value={editFormData?.carrier || ''} 
+                          onChange={(e) => {
+                            const newCarrier = e.target.value;
+                            const availableStatuses = getAvailableStatuses(newCarrier);
+                            const newStatus = availableStatuses.includes(editFormData?.status) 
+                              ? editFormData?.status 
+                              : availableStatuses[0];
+                            setEditFormData({ ...editFormData, carrier: newCarrier, status: newStatus });
+                          }} 
+                          className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                        >
                           {CARRIERS.filter(c => c !== 'Все').map(c => <option key={c} value={c}>{c}</option>)}
                         </select>
                       </div>
@@ -896,8 +1157,14 @@ export default function AdminOrdersPage() {
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-slate-500 mb-1">Статус</label>
-                        <select value={editFormData?.status || ''} onChange={(e) => setEditFormData({ ...editFormData, status: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800">
-                          {STATUSES.filter(s => s !== 'Все').map(s => <option key={s} value={s}>{s}</option>)}
+                        <select 
+                          value={editFormData?.status || ''} 
+                          onChange={(e) => setEditFormData({ ...editFormData, status: e.target.value })}
+                          className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                        >
+                          {getAvailableStatuses(editFormData?.carrier).map(s => (
+                            <option key={s} value={s}>{s}</option>
+                          ))}
                         </select>
                       </div>
                       <div>
@@ -967,10 +1234,76 @@ export default function AdminOrdersPage() {
                   </div>
                 ) : (
                   <div className="space-y-6">
+                    {/* Блок консолидации - только для ТК */}
+                    {selectedOrderDetails.carrier !== 'Самовывоз' && (selectedOrderDetails.consolidationNumber || selectedOrderDetails.consolidationId || selectedOrderDetails.status === 'В консолидации') && (
+                      <Link href="/admin/consolidations" className="block group">
+                        <div className="p-4 bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-950/30 dark:to-indigo-950/30 border border-purple-200 dark:border-purple-800/50 rounded-2xl transition-all hover:shadow-md">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 bg-purple-100 dark:bg-purple-900/50 rounded-xl">
+                                <Layers className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                              </div>
+                              <div>
+                                <p className="text-xs font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-0.5">
+                                  Консолидация
+                                </p>
+                                <p className="font-bold text-purple-900 dark:text-purple-200 text-lg">
+                                  {selectedOrderDetails.consolidationNumber || selectedOrderDetails.consolidationId || 'В процессе консолидации'}
+                                </p>
+                                {selectedOrderDetails.status === 'В консолидации' && !selectedOrderDetails.consolidationNumber && (
+                                  <p className="text-xs text-purple-600 dark:text-purple-400 mt-1">
+                                    Заказ ожидает присвоения номера консолидации
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-purple-500 group-hover:text-purple-700 transition-colors">
+                                Перейти к консоли
+                              </span>
+                              <ExternalLink className="w-4 h-4 text-purple-400 group-hover:text-purple-600 transition-colors" />
+                            </div>
+                          </div>
+                        </div>
+                      </Link>
+                    )}
+
+                    {/* Быстрые действия для консолидации */}
+                    {selectedOrderDetails.carrier !== 'Самовывоз' && selectedOrderDetails.status === 'В консолидации' && (
+                      <div className="bg-purple-50 dark:bg-purple-950/30 p-5 rounded-3xl space-y-3">
+                        <div className="flex items-center gap-2 text-purple-700">
+                          <Layers size={18} />
+                          <span className="text-xs font-black uppercase">Действия с консолидацией</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button 
+                            onClick={() => window.open('/admin/consolidations', '_blank')}
+                            className="py-2 px-3 bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded-xl text-xs font-medium hover:bg-purple-200 transition-colors flex items-center justify-center gap-1"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            Открыть консоль
+                          </button>
+                          <button 
+                            onClick={() => {
+                              if (selectedOrderDetails.consolidationNumber) {
+                                navigator.clipboard?.writeText(selectedOrderDetails.consolidationNumber);
+                                showToast('Номер консолидации скопирован', 'success');
+                              }
+                            }}
+                            className="py-2 px-3 bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded-xl text-xs font-medium hover:bg-purple-200 transition-colors flex items-center justify-center gap-1"
+                            disabled={!selectedOrderDetails.consolidationNumber}
+                          >
+                            <Copy className="w-3 h-3" />
+                            Копировать номер
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-2 gap-4">
                       <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-2xl">
                         <div className="flex items-center gap-2 text-slate-500 mb-1"><User className="w-4 h-4" /><span className="text-[10px] font-black">Сборщик</span></div>
-                        <p className="font-bold">{selectedOrderDetails.createdBy?.split('@')[0] || selectedOrderDetails.createdBy || '—'}</p>
+                        <p className="font-bold">{selectedOrderDetails.createdBy || '—'}</p>
                       </div>
                       <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-2xl">
                         <div className="flex items-center gap-2 text-slate-500 mb-1"><Clock className="w-4 h-4" /><span className="text-[10px] font-black">Время сборки</span></div>
@@ -998,24 +1331,6 @@ export default function AdminOrdersPage() {
                       </div>
                     )}
 
-                    {/* 🔥 БЛОК: Информация о консолидации */}
-                    {selectedOrderDetails.consolidationId || selectedOrderDetails.consolidationNumber ? (
-                      <div className="p-4 bg-purple-50 dark:bg-purple-950/30 rounded-2xl border border-purple-200 dark:border-purple-800">
-                        <div className="flex items-center gap-2 text-purple-700 dark:text-purple-300">
-                          <Layers className="w-5 h-5" />
-                          <span className="text-sm font-semibold uppercase tracking-wider">Консолидация</span>
-                        </div>
-                        <p className="text-lg font-bold text-purple-900 dark:text-purple-200 mt-1">
-                          Находится в консоли: {selectedOrderDetails.consolidationNumber || 'Без номера'}
-                        </p>
-                        {selectedOrderDetails.consolidationId && (
-                          <p className="text-xs text-purple-500 dark:text-purple-400 mt-1 font-mono">
-                            ID: {selectedOrderDetails.consolidationId}
-                          </p>
-                        )}
-                      </div>
-                    ) : null}
-
                     <div className="border-t border-slate-100 dark:border-slate-800 pt-4 space-y-3">
                       <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2"><DollarSign className="w-4 h-4 text-emerald-500" />Финансовая информация</h3>
                       <div className="flex justify-between p-3 bg-blue-50 dark:bg-blue-950/30 rounded-xl"><span className="text-blue-800">Сумма заказа:</span><span className="font-bold">{selectedOrderDetails.payment_sum?.toLocaleString() || 0} ₽</span></div>
@@ -1026,59 +1341,370 @@ export default function AdminOrdersPage() {
 
                     <ReturnManagement order={selectedOrderDetails} onUpdate={refresh} />
 
-                    <div className="bg-blue-50 dark:bg-blue-950/30 p-5 rounded-3xl space-y-4">
-                      <div className="flex items-center gap-2 text-blue-700"><CheckCircle2 size={18} /><span className="text-xs font-black uppercase">Управление статусом</span></div>
-                      <div className="flex flex-wrap gap-2">
-                        {selectedOrderDetails.carrier === 'Самовывоз' && selectedOrderDetails.status === 'Готов к выдаче' && (
-                          <button onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Выдан')} disabled={updatingStatusId === selectedOrderDetails.id} className="px-4 py-2 bg-emerald-600 text-white text-xs font-bold rounded-xl">{updatingStatusId === selectedOrderDetails.id ? <Loader2 className="w-3 h-3 animate-spin" /> : 'ВЫДАТЬ КЛИЕНТУ'}</button>
-                        )}
-                        {selectedOrderDetails.carrier !== 'Самовывоз' && selectedOrderDetails.status === 'Ожидает оформления' && (
-                          <button onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Оформлен')} disabled={updatingStatusId === selectedOrderDetails.id} className="px-4 py-2 bg-orange-500 text-white text-xs font-bold rounded-xl">{updatingStatusId === selectedOrderDetails.id ? <Loader2 className="w-3 h-3 animate-spin" /> : 'ОФОРМИТЬ НАКЛАДНУЮ'}</button>
-                        )}
-                        {selectedOrderDetails.status === 'Оформлен' && (
-                          <button onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Отправлен')} disabled={updatingStatusId === selectedOrderDetails.id} className="px-4 py-2 bg-emerald-600 text-white text-xs font-bold rounded-xl">{updatingStatusId === selectedOrderDetails.id ? <Loader2 className="w-3 h-3 animate-spin" /> : 'ОТМЕТИТЬ ОТПРАВЛЕННЫМ'}</button>
+                    {/* Блок управления статусом */}
+                    <div className={`p-5 rounded-3xl space-y-4 ${
+                      selectedOrderDetails.carrier === 'Самовывоз' 
+                        ? 'bg-green-50 dark:bg-green-950/30' 
+                        : 'bg-blue-50 dark:bg-blue-950/30'
+                    }`}>
+                      <div className={`flex items-center gap-2 ${
+                        selectedOrderDetails.carrier === 'Самовывоз' 
+                          ? 'text-green-700' 
+                          : 'text-blue-700'
+                      }`}>
+                        <CheckCircle2 size={18} />
+                        <span className="text-xs font-black uppercase">Управление статусом</span>
+                        <span className={`ml-auto px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          selectedOrderDetails.carrier === 'Самовывоз' 
+                            ? 'bg-green-200 dark:bg-green-800 text-green-800 dark:text-green-200' 
+                            : 'bg-blue-200 dark:bg-blue-800 text-blue-800 dark:text-blue-200'
+                        }`}>
+                          {selectedOrderDetails.carrier === 'Самовывоз' ? 'Самовывоз' : 'ТК'}
+                        </span>
+                      </div>
+                      
+                      {/* Кнопки быстрой смены статуса */}
+                      <div className="grid grid-cols-2 gap-2">
+                        {selectedOrderDetails.carrier === 'Самовывоз' ? (
+                          // Кнопки для самовывоза
+                          <>
+                            {selectedOrderDetails.status === 'Новый' && (
+                              <button
+                                type="button"
+                                onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Готов к выдаче')}
+                                disabled={updatingStatusId === selectedOrderDetails.id}
+                                className="col-span-2 py-2.5 px-3 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 rounded-xl text-xs font-bold hover:bg-indigo-200 dark:hover:bg-indigo-800/50 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                              >
+                                {updatingStatusId === selectedOrderDetails.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Package className="w-3 h-3" />
+                                )}
+                                Готов к выдаче
+                              </button>
+                            )}
+                            
+                            {selectedOrderDetails.status === 'Готов к выдаче' && (
+                              <button
+                                type="button"
+                                onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Выдан')}
+                                disabled={updatingStatusId === selectedOrderDetails.id}
+                                className="col-span-2 py-2.5 px-3 bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 rounded-xl text-xs font-bold hover:bg-green-200 dark:hover:bg-green-800/50 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                              >
+                                {updatingStatusId === selectedOrderDetails.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <CheckSquare className="w-3 h-3" />
+                                )}
+                                Выдать заказ
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          // Кнопки для ТК
+                          <>
+                            {selectedOrderDetails.status === 'Новый' && (
+                              <button
+                                type="button"
+                                onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Комплектация')}
+                                disabled={updatingStatusId === selectedOrderDetails.id}
+                                className="col-span-2 py-2.5 px-3 bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded-xl text-xs font-bold hover:bg-blue-200 dark:hover:bg-blue-800/50 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                              >
+                                {updatingStatusId === selectedOrderDetails.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Package className="w-3 h-3" />
+                                )}
+                                В комплектацию
+                              </button>
+                            )}
+                            
+                            {selectedOrderDetails.status === 'Комплектация' && (
+                              <button
+                                type="button"
+                                onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Ожидает оформления')}
+                                disabled={updatingStatusId === selectedOrderDetails.id}
+                                className="col-span-2 py-2.5 px-3 bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 rounded-xl text-xs font-bold hover:bg-amber-200 dark:hover:bg-amber-800/50 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                              >
+                                {updatingStatusId === selectedOrderDetails.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Clock className="w-3 h-3" />
+                                )}
+                                Ожидает оформления
+                              </button>
+                            )}
+                            
+                            {selectedOrderDetails.status === 'Ожидает оформления' && (
+                              <button
+                                type="button"
+                                onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Оформлен')}
+                                disabled={updatingStatusId === selectedOrderDetails.id}
+                                className="col-span-2 py-2.5 px-3 bg-cyan-100 dark:bg-cyan-900/50 text-cyan-700 dark:text-cyan-300 rounded-xl text-xs font-bold hover:bg-cyan-200 dark:hover:bg-cyan-800/50 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                              >
+                                {updatingStatusId === selectedOrderDetails.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <CheckCircle2 className="w-3 h-3" />
+                                )}
+                                Оформить
+                              </button>
+                            )}
+                            
+                            {selectedOrderDetails.status === 'Оформлен' && (
+                              <button
+                                type="button"
+                                onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'Отправлен')}
+                                disabled={updatingStatusId === selectedOrderDetails.id}
+                                className="col-span-2 py-2.5 px-3 bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 rounded-xl text-xs font-bold hover:bg-emerald-200 dark:hover:bg-emerald-800/50 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                              >
+                                {updatingStatusId === selectedOrderDetails.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Truck className="w-3 h-3" />
+                                )}
+                                Отправить
+                              </button>
+                            )}
+                            
+                            {/* Кнопка "В консолидацию" */}
+                            {(selectedOrderDetails.status === 'Новый' || 
+                              selectedOrderDetails.status === 'Комплектация' || 
+                              selectedOrderDetails.status === 'Ожидает оформления') && (
+                              <button
+                                type="button"
+                                onClick={() => handleSingleStatusChange(selectedOrderDetails.id, 'В консолидации')}
+                                disabled={updatingStatusId === selectedOrderDetails.id}
+                                className="col-span-2 py-2.5 px-3 bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded-xl text-xs font-bold hover:bg-purple-200 dark:hover:bg-purple-800/50 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                              >
+                                {updatingStatusId === selectedOrderDetails.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Layers className="w-3 h-3" />
+                                )}
+                                В консолидацию
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
-                      <select value={selectedOrderDetails.status} onChange={(e) => handleSingleStatusChange(selectedOrderDetails.id, e.target.value)} disabled={updatingStatusId === selectedOrderDetails.id} className="w-full bg-white border-2 border-blue-200 text-sm font-bold rounded-2xl p-3">
-                        {STATUSES.filter(s => s !== 'Все' && s !== 'В консолидации').map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
+                      
+                      {/* Индикатор последовательности статусов */}
+                      <div className="relative pt-2">
+                        <div className="flex items-center justify-between">
+                          {(selectedOrderDetails.carrier === 'Самовывоз' ? PICKUP_STATUSES : TK_STATUSES).map((status, index, array) => {
+                            const statusIndex = array.indexOf(selectedOrderDetails.status);
+                            const isCompleted = statusIndex >= index;
+                            const isCurrent = selectedOrderDetails.status === status;
+                            const color = selectedOrderDetails.carrier === 'Самовывоз' ? 'green' : 'blue';
+                            
+                            return (
+                              <div key={status} className="flex flex-col items-center relative z-10">
+                                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold transition-all
+                                  ${isCompleted
+                                    ? `bg-${color}-600 text-white shadow-lg shadow-${color}-200` 
+                                    : isCurrent
+                                      ? `bg-${color}-100 text-${color}-600 border-2 border-${color}-600`
+                                      : 'bg-slate-100 text-slate-400 dark:bg-slate-800'}`}
+                                >
+                                  {index + 1}
+                                </div>
+                                <span className={`text-[8px] font-bold mt-1 uppercase tracking-wider text-center
+                                  ${isCompleted ? `text-${color}-600` : 'text-slate-400'}`}>
+                                  {status === 'Готов к выдаче' ? 'Готов' : 
+                                   status === 'Ожидает оформления' ? 'Ожидает' :
+                                   status === 'В консолидации' ? 'Консоль' : status}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="absolute top-3 left-0 right-0 h-0.5 bg-slate-200 dark:bg-slate-700 -z-0">
+                          <div 
+                            className={`h-full transition-all duration-500 ${
+                              selectedOrderDetails.carrier === 'Самовывоз' ? 'bg-green-600' : 'bg-blue-600'
+                            }`}
+                            style={{ 
+                              width: (() => {
+                                const statuses = selectedOrderDetails.carrier === 'Самовывоз' ? PICKUP_STATUSES : TK_STATUSES;
+                                const index = statuses.indexOf(selectedOrderDetails.status);
+                                return index >= 0 ? `${(index / (statuses.length - 1)) * 100}%` : '0%';
+                              })()
+                            }}
+                          />
+                        </div>
+                      </div>
+                      
+                      {/* Выпадающий список для всех статусов */}
+                      <div className="relative">
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1.5 uppercase tracking-wider">
+                          Все статусы
+                        </label>
+                        <select 
+                          value={selectedOrderDetails.status} 
+                          onChange={(e) => handleSingleStatusChange(selectedOrderDetails.id, e.target.value)} 
+                          disabled={updatingStatusId === selectedOrderDetails.id}
+                          className="w-full bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 text-sm font-bold rounded-2xl p-3 cursor-pointer hover:border-slate-300 transition-all disabled:opacity-50"
+                        >
+                          {getAvailableStatuses(selectedOrderDetails.carrier).map(s => (
+                            <option key={s} value={s}>{s}</option>
+                          ))}
+                        </select>
+                        {updatingStatusId === selectedOrderDetails.id && (
+                          <div className="absolute right-3 top-9">
+                            <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                          </div>
+                        )}
+                      </div>
+                      
+                      {/* Подсказка по текущему статусу */}
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-800/50 p-2 rounded-lg">
+                        {selectedOrderDetails.status === 'Новый' && '📝 Заказ создан, ожидает обработки'}
+                        {selectedOrderDetails.status === 'Комплектация' && '📦 Идет сборка заказа на складе'}
+                        {selectedOrderDetails.status === 'Ожидает оформления' && '⏳ Заказ ожидает оформления документов'}
+                        {selectedOrderDetails.status === 'Готов к выдаче' && '✅ Заказ собран и готов к выдаче клиенту'}
+                        {selectedOrderDetails.status === 'Оформлен' && '📋 Документы оформлены, готов к отправке'}
+                        {selectedOrderDetails.status === 'Отправлен' && '🚚 Заказ передан в транспортную компанию'}
+                        {selectedOrderDetails.status === 'В консолидации' && '📦 Заказ находится в процессе консолидации с другими отправлениями'}
+                        {selectedOrderDetails.status === 'Выдан' && '🎉 Заказ успешно выдан получателю'}
+                        
+                        <div className="mt-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+                          {selectedOrderDetails.carrier === 'Самовывоз' ? (
+                            <span className="text-green-600 dark:text-green-400">🚶 Самовывоз:</span>
+                          ) : (
+                            <span className="text-blue-600 dark:text-blue-400">🚛 Транспортная компания:</span>
+                          )}
+                          {' '}
+                          {selectedOrderDetails.carrier === 'Самовывоз' 
+                            ? 'Статусы: Новый → Готов к выдаче → Выдан'
+                            : 'Статусы: Новый → Комплектация → Ожидает оформления → Оформлен → Отправлен (или В консолидации)'}
+                        </div>
+                      </div>
                     </div>
 
-                    {/* 🔥 ПЕРЕРАБОТАННЫЙ БЛОК: История изменений */}
+                    {/* Расширенная история изменений */}
                     {selectedOrderDetails.history && selectedOrderDetails.history.length > 0 && (
                       <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
-                        <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2 mb-3">
-                          <Clock className="w-4 h-4 text-slate-400" />
-                          История изменений статусов
-                        </h3>
+                        <div className="flex items-center justify-between mb-3">
+                          <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                            <Clock className="w-4 h-4 text-slate-400" />
+                            История изменений
+                          </h3>
+                          <span className="text-xs text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-full">
+                            {selectedOrderDetails.history.length} {selectedOrderDetails.history.length === 1 ? 'запись' : 
+                              selectedOrderDetails.history.length >= 2 && selectedOrderDetails.history.length <= 4 ? 'записи' : 'записей'}
+                          </span>
+                        </div>
                         
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-sm border-collapse">
-                            <thead>
-                              <tr className="border-b border-slate-200 dark:border-slate-700 text-left">
-                                <th className="py-2 px-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Статус</th>
-                                <th className="py-2 px-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Дата и время</th>
-                                <th className="py-2 px-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Пользователь</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                              {[...selectedOrderDetails.history].reverse().map((item: any, idx: number) => (
-                                <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                                  <td className="py-2 px-2">
-                                    <span className={`px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap ${getStatusColor(item.status)}`}>
-                                      {item.status}
-                                    </span>
-                                  </td>
-                                  <td className="py-2 px-2 text-slate-600 dark:text-slate-400 font-mono text-xs whitespace-nowrap">
-                                    {item.timestamp ? format(new Date(item.timestamp), 'dd.MM.yyyy HH:mm:ss') : '—'}
-                                  </td>
-                                  <td className="py-2 px-2 text-slate-700 dark:text-slate-300 text-xs">
-                                    {item.user?.split('@')[0] || item.user || 'Система'}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                        <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
+                          {selectedOrderDetails.history
+                            .slice()
+                            .sort((a, b) => {
+                              const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                              const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                              return timeB - timeA;
+                            })
+                            .map((item, idx: number) => {
+                              const isConsolidationEvent = item.action === 'added_to_consolidation' || item.action === 'removed_from_consolidation';
+                              
+                              const getEventIcon = () => {
+                                if (isConsolidationEvent) return <Layers className="w-4 h-4" />;
+                                if (item.status === 'Новый') return <Hash className="w-4 h-4" />;
+                                if (item.status === 'Комплектация') return <Package className="w-4 h-4" />;
+                                if (item.status === 'Ожидает оформления') return <Clock className="w-4 h-4" />;
+                                if (item.status === 'Оформлен') return <CheckCircle2 className="w-4 h-4" />;
+                                if (item.status === 'Отправлен') return <Truck className="w-4 h-4" />;
+                                if (item.status === 'Выдан') return <CheckSquare className="w-4 h-4" />;
+                                if (item.status === 'Готов к выдаче') return <Store className="w-4 h-4" />;
+                                return <Clock className="w-4 h-4" />;
+                              };
+                              
+                              return (
+                                <div key={idx} className="relative pl-6 pb-3">
+                                  {idx < selectedOrderDetails.history.length - 1 && (
+                                    <div className="absolute left-2 top-6 bottom-0 w-0.5 bg-slate-200 dark:bg-slate-700" />
+                                  )}
+                                  
+                                  <div className={`absolute left-0 top-1 w-4 h-4 rounded-full border-2 flex items-center justify-center
+                                    ${isConsolidationEvent 
+                                      ? 'bg-purple-100 border-purple-300 dark:bg-purple-900/50 dark:border-purple-700' 
+                                      : 'bg-blue-100 border-blue-300 dark:bg-blue-900/50 dark:border-blue-700'}`}
+                                  >
+                                    <div className={`w-1.5 h-1.5 rounded-full 
+                                      ${isConsolidationEvent 
+                                        ? 'bg-purple-500 dark:bg-purple-400' 
+                                        : 'bg-blue-500 dark:bg-blue-400'}`} 
+                                    />
+                                  </div>
+                                  
+                                  <div className={`p-4 rounded-xl transition-all
+                                    ${isConsolidationEvent 
+                                      ? 'bg-gradient-to-r from-purple-50 to-transparent dark:from-purple-950/20 dark:to-transparent border-l-2 border-purple-300 dark:border-purple-700' 
+                                      : 'bg-slate-50 dark:bg-slate-800/50'}`}
+                                  >
+                                    <div className="flex items-start justify-between gap-3 mb-2">
+                                      <div className="flex items-center gap-2">
+                                        <span className={`p-1.5 rounded-lg ${isConsolidationEvent ? 'bg-purple-100 dark:bg-purple-900/50 text-purple-600' : 'bg-blue-100 dark:bg-blue-900/50 text-blue-600'}`}>
+                                          {getEventIcon()}
+                                        </span>
+                                        <div>
+                                          <div className="flex items-center gap-2 flex-wrap">
+                                            {isConsolidationEvent ? (
+                                              <span className="font-bold text-purple-700 dark:text-purple-300">
+                                                {item.action === 'added_to_consolidation' ? 'Добавлен в консолидацию' : 'Удален из консолидации'}
+                                              </span>
+                                            ) : (
+                                              <>
+                                                <span className={`px-2.5 py-1 rounded-lg text-xs font-bold ${getStatusColor(item.status)}`}>
+                                                  {item.status}
+                                                </span>
+                                                {item.previousStatus && (
+                                                  <>
+                                                    <span className="text-slate-400 text-xs">←</span>
+                                                    <span className="text-xs text-slate-500">
+                                                      {item.previousStatus}
+                                                    </span>
+                                                  </>
+                                                )}
+                                              </>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <time className="text-xs text-slate-500 font-medium whitespace-nowrap">
+                                        {formatHistoryTimestamp(item.timestamp)}
+                                      </time>
+                                    </div>
+                                    
+                                    {item.consolidationNumber && (
+                                      <div className="mt-3 p-3 bg-white dark:bg-slate-900/50 rounded-lg border border-purple-100 dark:border-purple-800/30">
+                                        <div className="flex items-center gap-2">
+                                          <Layers className="w-4 h-4 text-purple-500" />
+                                          <span className="text-sm font-mono font-bold text-purple-700 dark:text-purple-300">
+                                            {item.consolidationNumber}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    )}
+                                    
+                                    {item.comment && (
+                                      <div className="mt-3 p-3 bg-amber-50 dark:bg-amber-950/20 rounded-lg border border-amber-100 dark:border-amber-800/30">
+                                        <p className="text-sm text-amber-800 dark:text-amber-300 italic">
+                                          "{item.comment}"
+                                        </p>
+                                      </div>
+                                    )}
+                                    
+                                    <div className="mt-3 flex items-center gap-2 text-xs">
+                                      <User className="w-3 h-3 text-slate-400" />
+                                      <span className="text-slate-600 dark:text-slate-400 font-medium">
+                                        {item.user || 'Система'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
                         </div>
                       </div>
                     )}
