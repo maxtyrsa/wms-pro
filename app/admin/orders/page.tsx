@@ -3,14 +3,14 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
-import { 
-  collection, 
-  query, 
-  orderBy, 
-  writeBatch, 
-  doc, 
-  updateDoc, 
-  deleteDoc, 
+import {
+  collection,
+  query,
+  orderBy,
+  writeBatch,
+  doc,
+  updateDoc,
+  deleteDoc,
   serverTimestamp,
   getDocs,
   getDoc,
@@ -18,7 +18,9 @@ import {
   QueryConstraint,
   startAfter,
   limit,
-  DocumentSnapshot
+  DocumentSnapshot,
+  onSnapshot,
+  Unsubscribe
 } from 'firebase/firestore';
 import { format, startOfDay, endOfDay, startOfMonth, endOfMonth } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -34,6 +36,7 @@ import { showToast } from '@/components/Toast';
 import { ReturnManagement } from '@/components/returns/ReturnManagement';
 import { useInView } from 'react-intersection-observer';
 import Link from 'next/link';
+import { ShippedOrdersList } from '@/components/orders/ShippedOrdersList';
 
 const CARRIERS = ['Все', 'CDEK', 'DPD', 'Деловые линии', 'Почта России', 'ПЭК', 'Самовывоз', 'Образцы', 'OZON_FBS', 'Ярмарка Мастеров', 'Yandex Market', 'WB_FBS', 'AliExpress', 'Бийск', 'OZON_FBO', 'WB_FBO'];
 
@@ -100,7 +103,7 @@ interface Filters {
   searchQuery: string;
 }
 
-// Хук для пагинированной загрузки заказов
+// Хук для пагинированной загрузки заказов с	real-time обновлениями
 function usePaginatedOrders(filters: Filters) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [lastDoc, setLastDoc] = useState<DocumentSnapshot | null>(null);
@@ -109,6 +112,7 @@ function usePaginatedOrders(filters: Filters) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const unsubscribeRef = useRef<Unsubscribe | null>(null);
 
   const buildConstraints = useCallback((): QueryConstraint[] => {
     const constraints: QueryConstraint[] = [];
@@ -140,10 +144,18 @@ function usePaginatedOrders(filters: Filters) {
     return constraints;
   }, [filters]);
 
-  const loadInitialOrders = useCallback(async () => {
+  const cleanupSubscription = useCallback(() => {
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+      unsubscribeRef.current = null;
+    }
+  }, []);
+
+  const setupRealtimeListener = useCallback(() => {
+    cleanupSubscription();
     setLoading(true);
     setError(null);
-    
+
     try {
       const constraints = buildConstraints();
       const q = query(
@@ -151,36 +163,45 @@ function usePaginatedOrders(filters: Filters) {
         ...constraints,
         limit(PAGE_SIZE)
       );
-      
-      const snapshot = await getDocs(q);
-      const newOrders = snapshot.docs.map(doc => ({ 
-        id: doc.id, 
-        ...doc.data() 
-      } as Order));
-      
-      setOrders(newOrders);
-      setLastDoc(snapshot.docs[snapshot.docs.length - 1] || null);
-      setHasMore(snapshot.docs.length === PAGE_SIZE);
-      
-      if (newOrders.length > 0) {
-        const countQuery = query(collection(db, 'orders'), ...constraints);
-        const countSnapshot = await getDocs(countQuery);
-        setTotalCount(countSnapshot.size);
-      }
+
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const newOrders = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        } as Order));
+
+        setOrders(newOrders);
+        setLastDoc(snapshot.docs[snapshot.docs.length - 1] || null);
+        setHasMore(snapshot.docs.length === PAGE_SIZE);
+        setLoading(false);
+
+        // Update total count
+        if (newOrders.length > 0) {
+          setTotalCount(newOrders.length);
+        } else {
+          setTotalCount(0);
+        }
+      }, (err) => {
+        console.error('Error in orders real-time listener:', err);
+        setError('Ошибка при загрузке заказов');
+        showToast('Ошибка при загрузке заказов', 'error');
+        setLoading(false);
+      });
+
+      unsubscribeRef.current = unsubscribe;
     } catch (err) {
-      console.error('Error loading orders:', err);
+      console.error('Error setting up orders listener:', err);
       setError('Ошибка при загрузке заказов');
       showToast('Ошибка при загрузке заказов', 'error');
-    } finally {
       setLoading(false);
     }
-  }, [buildConstraints]);
+  }, [buildConstraints, cleanupSubscription]);
 
   const loadMoreOrders = useCallback(async () => {
     if (!hasMore || loadingMore || loading) return;
-    
+
     setLoadingMore(true);
-    
+
     try {
       const constraints = buildConstraints();
       let q = query(
@@ -188,17 +209,17 @@ function usePaginatedOrders(filters: Filters) {
         ...constraints,
         limit(PAGE_SIZE)
       );
-      
+
       if (lastDoc) {
         q = query(q, startAfter(lastDoc));
       }
-      
+
       const snapshot = await getDocs(q);
-      const newOrders = snapshot.docs.map(doc => ({ 
-        id: doc.id, 
-        ...doc.data() 
+      const newOrders = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
       } as Order));
-      
+
       setOrders(prev => [...prev, ...newOrders]);
       setLastDoc(snapshot.docs[snapshot.docs.length - 1] || null);
       setHasMore(snapshot.docs.length === PAGE_SIZE);
@@ -211,8 +232,12 @@ function usePaginatedOrders(filters: Filters) {
   }, [hasMore, loadingMore, loading, lastDoc, buildConstraints]);
 
   useEffect(() => {
-    loadInitialOrders();
-  }, [loadInitialOrders]);
+    setupRealtimeListener();
+
+    return () => {
+      cleanupSubscription();
+    };
+  }, [setupRealtimeListener, cleanupSubscription]);
 
   return {
     orders,
@@ -222,7 +247,7 @@ function usePaginatedOrders(filters: Filters) {
     totalCount,
     error,
     loadMore: loadMoreOrders,
-    refresh: loadInitialOrders
+    refresh: setupRealtimeListener
   };
 }
 
@@ -230,6 +255,8 @@ export default function AdminOrdersPage() {
   const { user } = useAuth();
   const router = useRouter();
   const { ref: loadMoreRef, inView } = useInView();
+
+  const [currentView, setCurrentView] = useState('allOrders');
   
   const [filters, setFilters] = useState<Filters>({
     startDate: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
@@ -819,269 +846,294 @@ export default function AdminOrdersPage() {
       </header>
 
       <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
-        {/* Фильтры */}
-        <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 space-y-4">
-          <div className="relative">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Поиск по номеру заказа..."
-              value={filters.searchQuery}
-              onChange={(e) => handleFilterChange('searchQuery', e.target.value)}
-              className="w-full pl-12 pr-10 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
-            />
-            {filters.searchQuery && (
-              <button onClick={clearSearch} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                <XCircle className="w-5 h-5" />
-              </button>
-            )}
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">От даты</label>
-              <input 
-                type="date" 
-                value={filters.startDate} 
-                onChange={(e) => handleFilterChange('startDate', e.target.value)}
-                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" 
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">До даты</label>
-              <input 
-                type="date" 
-                value={filters.endDate} 
-                onChange={(e) => handleFilterChange('endDate', e.target.value)}
-                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" 
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Компания</label>
-              <select 
-                value={filters.carrier} 
-                onChange={(e) => handleFilterChange('carrier', e.target.value)}
-                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer"
-              >
-                {CARRIERS.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Статус</label>
-              <select 
-                value={filters.status} 
-                onChange={(e) => handleFilterChange('status', e.target.value)}
-                className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer"
-              >
-                {ALL_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-          </div>
-          
-          {(filters.carrier !== 'Все' || filters.status !== 'Все' || filters.searchQuery) && (
-            <div className="flex flex-wrap gap-2 pt-2">
-              <span className="text-xs text-slate-500">Активные фильтры:</span>
-              {filters.carrier !== 'Все' && (
-                <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 rounded-lg text-xs">
-                  ТК: {filters.carrier}
-                  <button onClick={() => handleFilterChange('carrier', 'Все')} className="hover:text-blue-900">×</button>
-                </span>
-              )}
-              {filters.status !== 'Все' && (
-                <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300 rounded-lg text-xs">
-                  Статус: {filters.status}
-                  <button onClick={() => handleFilterChange('status', 'Все')} className="hover:text-purple-900">×</button>
-                </span>
-              )}
-              {filters.searchQuery && (
-                <span className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-lg text-xs">
-                  Поиск: {filters.searchQuery}
-                  <button onClick={clearSearch} className="hover:text-slate-900">×</button>
-                </span>
-              )}
-              <button onClick={resetDateFilter} className="text-xs text-blue-600 hover:underline ml-auto">
-                Сбросить даты
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Bulk Actions Bar */}
-        <div className="flex flex-col md:flex-row items-center justify-between bg-white dark:bg-slate-900 p-4 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 gap-4">
-          <div className="flex items-center gap-3">
+        <div className="bg-white dark:bg-slate-900 p-1 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 flex items-center justify-center space-x-2">
             <button 
-              onClick={toggleAllSelection} 
-              className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 text-sm font-bold text-slate-700 dark:text-slate-300 transition-all border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+                onClick={() => setCurrentView('allOrders')}
+                className={`px-6 py-2 rounded-2xl text-sm font-bold transition-all ${currentView === 'allOrders' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
             >
-              {selectedOrders.size === orders.length && orders.length > 0 ? 
-                <CheckSquare className="w-5 h-5 text-blue-600" /> : <Square className="w-5 h-5 text-slate-300" />}
-              Выбрать все
+                Все заказы
             </button>
-            <div className="h-6 w-[1px] bg-slate-200 dark:bg-slate-700 hidden md:block" />
-            <span className="text-sm font-medium text-slate-500 dark:text-slate-400">
-              Найдено: <b className="text-slate-900 dark:text-white">{orders.length}</b>
-              {totalCount !== null && totalCount > orders.length && <span className="text-xs ml-1">(из {totalCount})</span>}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <button 
-                onClick={() => setMassStatusMenuOpen(!massStatusMenuOpen)} 
-                disabled={selectedOrders.size === 0 || bulkUpdating}
-                className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-900 dark:bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-black disabled:opacity-30 transition-all"
-              >
-                {bulkUpdating ? (
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                ) : (
-                  <>
-                    Массовое изменение ({selectedOrders.size})
-                    <ChevronDown className="w-3 h-3" />
-                  </>
-                )}
-              </button>
-              
-              <AnimatePresence>
-                {massStatusMenuOpen && !bulkUpdating && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: 10 }} 
-                    animate={{ opacity: 1, y: 0 }} 
-                    exit={{ opacity: 0, y: 10 }}
-                    className="absolute right-0 mt-3 w-56 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-100 dark:border-slate-700 overflow-hidden z-40 p-1 max-h-80 overflow-y-auto"
-                  >
-                    <div className="px-3 py-2 text-[10px] font-bold text-slate-400 uppercase">Для ТК</div>
-                    {TK_STATUSES.map(status => (
-                      <button 
-                        key={status} 
-                        onClick={() => handleMassStatusChange(status)}
-                        className="w-full text-left px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-blue-950/30 hover:text-blue-700 dark:hover:text-blue-400 rounded-xl transition-all"
-                      >
-                        {status}
-                      </button>
-                    ))}
-                    <div className="px-3 py-2 text-[10px] font-bold text-slate-400 uppercase mt-2">Для Самовывоза</div>
-                    {PICKUP_STATUSES.map(status => (
-                      <button 
-                        key={status} 
-                        onClick={() => handleMassStatusChange(status)}
-                        className="w-full text-left px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-green-50 dark:hover:bg-green-950/30 hover:text-green-700 dark:hover:text-green-400 rounded-xl transition-all"
-                      >
-                        {status}
-                      </button>
-                    ))}
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          </div>
+            <button 
+                onClick={() => setCurrentView('shipped')}
+                className={`px-6 py-2 rounded-2xl text-sm font-bold transition-all ${currentView === 'shipped' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+            >
+                Отправленные
+            </button>
         </div>
 
-        {/* Таблица заказов */}
-        <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/50 dark:bg-slate-800/50 text-slate-400 text-[11px] font-bold uppercase tracking-widest border-b border-slate-100 dark:border-slate-700">
-                  <th className="p-5 w-14"></th>
-                  <th className="p-5">Дата</th>
-                  <th className="p-5">Заказ</th>
-                  <th className="p-5">ТК</th>
-                  <th className="p-5">Статус</th>
-                  <th className="p-5">Сборщик</th>
-                  <th className="p-5 text-center">Время</th>
-                  <th className="p-5 text-right">Вес</th>
-                  <th className="p-5 text-right">Прибыль</th>
-                  <th className="p-5 text-right w-12"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {orders.length === 0 ? (
-                  <tr>
-                    <td colSpan={10} className="p-20 text-center text-slate-400 dark:text-slate-500 font-medium">
-                      {filters.searchQuery || filters.carrier !== 'Все' || filters.status !== 'Все' 
-                        ? 'Заказы не найдены по выбранным фильтрам' 
-                        : 'Заказов пока нет'}
-                    </td>
-                  </tr>
-                ) : (
-                  orders.map(order => (
-                    <tr 
-                      key={order.id} 
-                      onClick={() => setSelectedOrderDetails(order)}
-                      className={`group hover:bg-blue-50/30 dark:hover:bg-blue-950/30 transition-all cursor-pointer ${selectedOrders.has(order.id) ? 'bg-blue-50 dark:bg-blue-950/20' : ''}`}
-                    >
-                      <td className="p-5" onClick={(e) => e.stopPropagation()}>
-                        <button onClick={() => toggleOrderSelection(order.id)} className="transition-transform active:scale-90">
-                          {selectedOrders.has(order.id) ? <CheckSquare className="w-6 h-6 text-blue-600" /> : <Square className="w-6 h-6 text-slate-200 group-hover:text-slate-300" />}
-                        </button>
-                      </td>
-                      <td className="p-5 text-slate-500 dark:text-slate-400 text-xs font-medium whitespace-nowrap">
-                        {order.createdAt ? format(new Date(order.createdAt.seconds ? order.createdAt.seconds * 1000 : order.createdAt), 'dd.MM.yy HH:mm') : '-'}
-                      </td>
-                      <td className="p-5 font-bold text-slate-900 dark:text-white">
-                        <div className="flex items-center gap-2">
-                          {order.orderNumber || '—'}
-                          {order.carrier === 'Самовывоз' && (
-                            <Store className="w-3 h-3 text-green-500" title="Самовывоз" />
-                          )}
-                        </div>
-                      </td>
-                      <td className="p-5 text-slate-600 dark:text-slate-400 font-semibold text-xs uppercase">{order.carrier}</td>
-                      <td className="p-5">
-                        <span className={`px-3 py-1.5 rounded-xl text-[10px] font-bold border uppercase tracking-tight ${getStatusColor(order.status)}`}>
-                          {order.status}
-                        </span>
-                      </td>
-                      <td className="p-5 text-slate-600 dark:text-slate-400 text-xs font-medium truncate max-w-[120px]">
-                        {order.createdBy || 'Система'}
-                      </td>
-                      <td className="p-5 text-center font-mono text-xs text-slate-500 dark:text-slate-400">
-                        {formatAssemblyTime(order.time_start, order.time_end)}
-                      </td>
-                      <td className="p-5 text-right font-bold text-slate-900 dark:text-white">
-                        {order.totalWeight ? `${Number(order.totalWeight).toFixed(1)} кг` : '—'}
-                      </td>
-                      <td className="p-5 text-right font-bold text-emerald-600 dark:text-emerald-400">
-                        {order.profit ? `${order.profit.toLocaleString()} ₽` : '—'}
-                      </td>
-                      <td className="p-5 text-right">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedOrderDetails(order);
-                            openEditMode();
-                          }}
-                          className="p-2 text-slate-400 hover:text-blue-600 transition-colors opacity-0 group-hover:opacity-100"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+        {currentView === 'allOrders' && (
+          <>
+            {/* Фильтры */}
+            <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 space-y-4">
+              <div className="relative">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Поиск по номеру заказа..."
+                  value={filters.searchQuery}
+                  onChange={(e) => handleFilterChange('searchQuery', e.target.value)}
+                  className="w-full pl-12 pr-10 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+                {filters.searchQuery && (
+                  <button onClick={clearSearch} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                    <XCircle className="w-5 h-5" />
+                  </button>
                 )}
-              </tbody>
-            </table>
-          </div>
-          
-          {orders.length > 0 && hasMore && (
-            <div ref={loadMoreRef} className="flex items-center justify-center px-6 py-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-800/30">
-              {loadingMore ? (
-                <div className="flex items-center gap-2 text-slate-500">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span className="text-sm">Загрузка...</span>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">От даты</label>
+                  <input 
+                    type="date" 
+                    value={filters.startDate} 
+                    onChange={(e) => handleFilterChange('startDate', e.target.value)}
+                    className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" 
+                  />
                 </div>
-              ) : (
-                <button
-                  onClick={loadMore}
-                  className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-all"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                  Загрузить еще
-                </button>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">До даты</label>
+                  <input 
+                    type="date" 
+                    value={filters.endDate} 
+                    onChange={(e) => handleFilterChange('endDate', e.target.value)}
+                    className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all" 
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Компания</label>
+                  <select 
+                    value={filters.carrier} 
+                    onChange={(e) => handleFilterChange('carrier', e.target.value)}
+                    className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer"
+                  >
+                    {CARRIERS.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Статус</label>
+                  <select 
+                    value={filters.status} 
+                    onChange={(e) => handleFilterChange('status', e.target.value)}
+                    className="block w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none cursor-pointer"
+                  >
+                    {ALL_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+              </div>
+              
+              {(filters.carrier !== 'Все' || filters.status !== 'Все' || filters.searchQuery) && (
+                <div className="flex flex-wrap gap-2 pt-2">
+                  <span className="text-xs text-slate-500">Активные фильтры:</span>
+                  {filters.carrier !== 'Все' && (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 rounded-lg text-xs">
+                      ТК: {filters.carrier}
+                      <button onClick={() => handleFilterChange('carrier', 'Все')} className="hover:text-blue-900">×</button>
+                    </span>
+                  )}
+                  {filters.status !== 'Все' && (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300 rounded-lg text-xs">
+                      Статус: {filters.status}
+                      <button onClick={() => handleFilterChange('status', 'Все')} className="hover:text-purple-900">×</button>
+                    </span>
+                  )}
+                  {filters.searchQuery && (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-lg text-xs">
+                      Поиск: {filters.searchQuery}
+                      <button onClick={clearSearch} className="hover:text-slate-900">×</button>
+                    </span>
+                  )}
+                  <button onClick={resetDateFilter} className="text-xs text-blue-600 hover:underline ml-auto">
+                    Сбросить даты
+                  </button>
+                </div>
               )}
             </div>
-          )}
-        </div>
+
+            {/* Bulk Actions Bar */}
+            <div className="flex flex-col md:flex-row items-center justify-between bg-white dark:bg-slate-900 p-4 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 gap-4">
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={toggleAllSelection} 
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 text-sm font-bold text-slate-700 dark:text-slate-300 transition-all border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+                >
+                  {selectedOrders.size === orders.length && orders.length > 0 ? 
+                    <CheckSquare className="w-5 h-5 text-blue-600" /> : <Square className="w-5 h-5 text-slate-300" />}
+                  Выбрать все
+                </button>
+                <div className="h-6 w-[1px] bg-slate-200 dark:bg-slate-700 hidden md:block" />
+                <span className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                  Найдено: <b className="text-slate-900 dark:text-white">{orders.length}</b>
+                  {totalCount !== null && totalCount > orders.length && <span className="text-xs ml-1">(из {totalCount})</span>}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <button 
+                    onClick={() => setMassStatusMenuOpen(!massStatusMenuOpen)} 
+                    disabled={selectedOrders.size === 0 || bulkUpdating}
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-900 dark:bg-slate-800 text-white rounded-xl text-xs font-bold hover:bg-black disabled:opacity-30 transition-all"
+                  >
+                    {bulkUpdating ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <>
+                        Массовое изменение ({selectedOrders.size})
+                        <ChevronDown className="w-3 h-3" />
+                      </>
+                    )}
+                  </button>
+                  
+                  <AnimatePresence>
+                    {massStatusMenuOpen && !bulkUpdating && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: 10 }} 
+                        animate={{ opacity: 1, y: 0 }} 
+                        exit={{ opacity: 0, y: 10 }}
+                        className="absolute right-0 mt-3 w-56 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-100 dark:border-slate-700 overflow-hidden z-40 p-1 max-h-80 overflow-y-auto"
+                      >
+                        <div className="px-3 py-2 text-[10px] font-bold text-slate-400 uppercase">Для ТК</div>
+                        {TK_STATUSES.map(status => (
+                          <button 
+                            key={status} 
+                            onClick={() => handleMassStatusChange(status)}
+                            className="w-full text-left px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-blue-950/30 hover:text-blue-700 dark:hover:text-blue-400 rounded-xl transition-all"
+                          >
+                            {status}
+                          </button>
+                        ))}
+                        <div className="px-3 py-2 text-[10px] font-bold text-slate-400 uppercase mt-2">Для Самовывоза</div>
+                        {PICKUP_STATUSES.map(status => (
+                          <button 
+                            key={status} 
+                            onClick={() => handleMassStatusChange(status)}
+                            className="w-full text-left px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-green-50 dark:hover:bg-green-950/30 hover:text-green-700 dark:hover:text-green-400 rounded-xl transition-all"
+                          >
+                            {status}
+                          </button>
+                        ))}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              </div>
+            </div>
+
+            {/* Таблица заказов */}
+            <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50/50 dark:bg-slate-800/50 text-slate-400 text-[11px] font-bold uppercase tracking-widest border-b border-slate-100 dark:border-slate-700">
+                      <th className="p-5 w-14"></th>
+                      <th className="p-5">Дата</th>
+                      <th className="p-5">Заказ</th>
+                      <th className="p-5">ТК</th>
+                      <th className="p-5">Статус</th>
+                      <th className="p-5">Сборщик</th>
+                      <th className="p-5 text-center">Время</th>
+                      <th className="p-5 text-right">Вес</th>
+                      <th className="p-5 text-right">Прибыль</th>
+                      <th className="p-5 text-right w-12"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {orders.length === 0 ? (
+                      <tr>
+                        <td colSpan={10} className="p-20 text-center text-slate-400 dark:text-slate-500 font-medium">
+                          {filters.searchQuery || filters.carrier !== 'Все' || filters.status !== 'Все' 
+                            ? 'Заказы не найдены по выбранным фильтрам' 
+                            : 'Заказов пока нет'}
+                        </td>
+                      </tr>
+                    ) : (
+                      orders.map(order => (
+                        <tr 
+                          key={order.id} 
+                          onClick={() => setSelectedOrderDetails(order)}
+                          className={`group hover:bg-blue-50/30 dark:hover:bg-blue-950/30 transition-all cursor-pointer ${selectedOrders.has(order.id) ? 'bg-blue-50 dark:bg-blue-950/20' : ''}`}
+                        >
+                          <td className="p-5" onClick={(e) => e.stopPropagation()}>
+                            <button onClick={() => toggleOrderSelection(order.id)} className="transition-transform active:scale-90">
+                              {selectedOrders.has(order.id) ? <CheckSquare className="w-6 h-6 text-blue-600" /> : <Square className="w-6 h-6 text-slate-200 group-hover:text-slate-300" />}
+                            </button>
+                          </td>
+                          <td className="p-5 text-slate-500 dark:text-slate-400 text-xs font-medium whitespace-nowrap">
+                            {order.createdAt ? format(new Date(order.createdAt.seconds ? order.createdAt.seconds * 1000 : order.createdAt), 'dd.MM.yy HH:mm') : '-'}
+                          </td>
+                          <td className="p-5 font-bold text-slate-900 dark:text-white">
+                            <div className="flex items-center gap-2">
+                              {order.orderNumber || '—'}
+                              {order.carrier === 'Самовывоз' && (
+                                <Store className="w-3 h-3 text-green-500" title="Самовывоз" />
+                              )}
+                            </div>
+                          </td>
+                          <td className="p-5 text-slate-600 dark:text-slate-400 font-semibold text-xs uppercase">{order.carrier}</td>
+                          <td className="p-5">
+                            <span className={`px-3 py-1.5 rounded-xl text-[10px] font-bold border uppercase tracking-tight ${getStatusColor(order.status)}`}>
+                              {order.status}
+                            </span>
+                          </td>
+                          <td className="p-5 text-slate-600 dark:text-slate-400 text-xs font-medium truncate max-w-[120px]">
+                            {order.createdBy || 'Система'}
+                          </td>
+                          <td className="p-5 text-center font-mono text-xs text-slate-500 dark:text-slate-400">
+                            {formatAssemblyTime(order.time_start, order.time_end)}
+                          </td>
+                          <td className="p-5 text-right font-bold text-slate-900 dark:text-white">
+                            {order.totalWeight ? `${Number(order.totalWeight).toFixed(1)} кг` : '—'}
+                          </td>
+                          <td className="p-5 text-right font-bold text-emerald-600 dark:text-emerald-400">
+                            {order.profit ? `${order.profit.toLocaleString()} ₽` : '—'}
+                          </td>
+                          <td className="p-5 text-right">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedOrderDetails(order);
+                                openEditMode();
+                              }}
+                              className="p-2 text-slate-400 hover:text-blue-600 transition-colors opacity-0 group-hover:opacity-100"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              
+              {orders.length > 0 && hasMore && (
+                <div ref={loadMoreRef} className="flex items-center justify-center px-6 py-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-800/30">
+                  {loadingMore ? (
+                    <div className="flex items-center gap-2 text-slate-500">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span className="text-sm">Загрузка...</span>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={loadMore}
+                      className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-all"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                      Загрузить еще
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {currentView === 'shipped' && (
+          <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
+            <ShippedOrdersList />
+          </div>
+        )}
       </div>
 
       {/* Модальное окно деталей заказа */}
